@@ -6,7 +6,7 @@
 # This script will:
 # Use Python and OpenCV.
 # Use FSRCNN (a fast spatial model similar to FSR 1.0) because it's readily available for OpenCV.
-# Read a video file named input.mp4.
+# Read a video file named input480.mp4.
 # Upscale it 4x.
 # Save the new video as output_4x.mp4.
 # This script will be slow, as we discussed, but it will work and prove the concept.
@@ -29,7 +29,7 @@ import os
 import time
 
 # --- 1. Configuration ---
-INPUT_VIDEO = "input.mp4" 	 # Your source video file
+INPUT_VIDEO = "input480.mp4" 	 # Your source video file
 OUTPUT_VIDEO = "output_4x.mp4"	 # The upscaled file that will be created
 MODEL_FILE = "FSRCNN_x4.pb" 	 # The model file you must download
 MODEL_NAME = "fsrcnn"
@@ -37,7 +37,7 @@ MODEL_SCALE = 4 # The upscaling factor
 
 # --- 2. Check for Files ---
 if not os.path.exists(INPUT_VIDEO):
-	print(f"Error: Input video not found at '{INPUT_VIDEO}'. Please name your video 'input.mp4'.")
+	print(f"Error: Input video not found at '{INPUT_VIDEO}'. Please name your video 'input480.mp4'.")
 	exit()
 
 if not os.path.exists(MODEL_FILE):
@@ -122,7 +122,7 @@ cv2.destroyAllWindows()
 # How to Run It
 # Make sure you have opencv-contrib-python installed.
 # Make sure FSRCNN_x4.pb is in the same folder.
-# Get a video file (e.g., a short 10-second clip) and name it input.mp4.
+# Get a video file (e.g., a short 10-second clip) and name it input480.mp4.
 # Run the script from your terminal:
 # python upscale.py
 # ---------------------------------------------------
