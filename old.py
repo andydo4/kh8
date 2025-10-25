@@ -29,7 +29,7 @@ import os
 import time
 
 # --- 1. Configuration ---
-INPUT_VIDEO = "Funniest Cat Videos Compilation in 2 Minute - twominutes (480, h264).mp4" 	 # Your source video file
+INPUT_VIDEO = "input.mp4" 	 # Your source video file
 OUTPUT_VIDEO = "output_4x.mp4"	 # The upscaled file that will be created
 MODEL_FILE = "FSRCNN_x4.pb" 	 # The model file you must download
 MODEL_NAME = "fsrcnn"
