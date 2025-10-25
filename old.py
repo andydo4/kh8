@@ -16,6 +16,12 @@ import queue
 import numpy as np
 from collections import deque
 
+# --- AMD/ROCm Workaround ---
+# Disable problematic OpenCL optimizations for AMD GPUs
+os.environ['OPENCV_OPENCL_DEVICE'] = ':GPU:0'
+# Optionally disable OpenCL kernels cache if issues persist
+# os.environ['OPENCV_DNN_OPENCL_ALLOW_ALL_DEVICES'] = '1'
+
 # --- Configuration ---
 INPUT_VIDEO = "input480.mp4"
 OUTPUT_VIDEO = "output_4x.mp4"
@@ -70,25 +76,28 @@ def setup_model():
     sr.setModel(MODEL_NAME, MODEL_SCALE)
 
     # Force OpenCL/ROCm
-    cv2.ocl.setUseOpenCL(True)
+    try:
+        cv2.ocl.setUseOpenCL(True)
+    except:
+        pass
+
     sr.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
 
     have_ocl = cv2.ocl.haveOpenCL()
     if have_ocl:
-        if hasattr(cv2.dnn, "DNN_TARGET_OPENCL_FP16"):
-            try:
-                sr.setPreferableTarget(cv2.dnn.DNN_TARGET_OPENCL_FP16)
-                print("✓ Using OpenCL (FP16) with ROCm")
-                return sr, "OpenCL_FP16"
-            except:
-                pass
-        sr.setPreferableTarget(cv2.dnn.DNN_TARGET_OPENCL)
-        print("✓ Using OpenCL with ROCm")
-        return sr, "OpenCL"
-    else:
-        sr.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-        print("⚠ OpenCL unavailable, using CPU (will be slow)")
-        return sr, "CPU"
+        # Try standard OpenCL first (FP16 causes issues on AMD)
+        try:
+            sr.setPreferableTarget(cv2.dnn.DNN_TARGET_OPENCL)
+            print("✓ Using OpenCL (FP32) with ROCm/AMD GPU")
+            return sr, "OpenCL"
+        except Exception as e:
+            print(f"⚠ OpenCL setup warning: {e}")
+            pass
+
+    # Fallback to CPU
+    sr.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+    print("⚠ OpenCL unavailable, using CPU (will be slow)")
+    return sr, "CPU"
 
 
 sr, device = setup_model()
@@ -105,8 +114,8 @@ orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 new_w, new_h = orig_w * MODEL_SCALE, orig_h * MODEL_SCALE
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-writer = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (new_w, new_h))
-if not writer.isOpened():
+video_writer = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (new_w, new_h))
+if not video_writer.isOpened():
     raise SystemExit(f"Error: Could not create '{OUTPUT_VIDEO}'")
 
 print(f"\n{'=' * 60}")
@@ -165,7 +174,7 @@ def writer_thread():
 
             # Write frames in order
             while expected_frame in frame_buffer:
-                writer.write(frame_buffer[expected_frame])
+                video_writer.write(frame_buffer[expected_frame])
 
                 if DISPLAY_PREVIEW:
                     # Display at reduced size for preview
@@ -254,7 +263,7 @@ writer.join(timeout=5.0)
 
 # --- Cleanup & Statistics ---
 cap.release()
-writer.release()
+video_writer.release()
 cv2.destroyAllWindows()
 
 elapsed = time.time() - metrics.start_time
