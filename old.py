@@ -4,7 +4,7 @@
 # curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x4.pb -o FSRCNN_x4.pb
 
 """
-Near-live FSRCNN x4 video upscaler with ROCm/OpenCL
+Near-live FSRCNN x2 video upscaler with ROCm/OpenCL
 Optimized for minimal latency and maximum throughput using pipeline parallelism.
 """
 
