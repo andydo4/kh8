@@ -1,14 +1,23 @@
 from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit
+from flask_cors import CORS
 import os
+import threading
+import time
+from old import upscale_video
 # Import your existing upscaling functions here
 # from upscale_process import run_upscaling_logic
 
 app = Flask(__name__)
+CORS(app)
 app.config['SECRET_KEY'] = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE3GGKQ44NbwKY/jVFnhGiKzJasUWJAK31JHiINDzTAC server' 
 # Allow uploads up to a certain size (e.g., 500MB)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 socketio = SocketIO(app, cors_allowed_origins="*") # Allow connections
+
+if __name__ == '__main__':
+    print("Starting server on http://0.0.0.0:5000")
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
 
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
