@@ -8,7 +8,7 @@ VIDEO_PATH = "input480.mp4"
 OUT_DIR = Path("outputs_fsr2")
 TARGET_W = None  # None keeps source size; or set e.g. 1280
 USE_RAFT = False  # True if you've wired RAFT + GPU
-USE_MIDAS_SMALL = False  # Small = faster on mac
+USE_MIDAS_SMALL = True  # CHANGED: Use small model - more stable on ROCm
 FLOW_IMPL = "DIS"  # "DIS" or "FARNEBACK" (ignored if USE_RAFT)
 
 # Validate input file exists
@@ -29,8 +29,8 @@ if not os.path.exists(VIDEO_PATH):
 import torch
 
 # Set environment variables to help with ROCm stability
-os.environ['PYTORCH_HIP_ALLOC_CONF'] = 'expandable_segments:True'
-os.environ['HSA_FORCE_FINE_GRAIN_PCIE'] = '1'
+os.environ['PYTORCH_HIP_ALLOC_CONF'] = 'garbage_collection_threshold:0.6,max_split_size_mb:128'
+os.environ['HSA_OVERRIDE_GFX_VERSION'] = '9.4.0'  # MI300X compatibility
 
 if not torch.cuda.is_available():
     raise RuntimeError("ROCm GPU not detected. Check ROCm install and ROCm PyTorch wheels.")
@@ -49,23 +49,35 @@ def load_midas():
     mname = "MiDaS_small" if USE_MIDAS_SMALL else "DPT_Hybrid"
     print(f"Loading MiDaS model: {mname}...")
 
-    # Load model on CPU first to avoid GPU issues during init
-    midas = torch.hub.load('intel-isl/MiDaS', mname, trust_repo=True)
-    print(f"Moving model to {DEVICE}...")
-    midas = midas.to(DEVICE).eval()
+    try:
+        # Load model and keep on CPU initially
+        print("Loading model weights...")
+        midas = torch.hub.load('intel-isl/MiDaS', mname, trust_repo=True)
+        midas = midas.eval()
 
-    transforms = torch.hub.load('intel-isl/MiDaS', 'transforms', trust_repo=True)
-    tfm = transforms.small_transform if USE_MIDAS_SMALL else transforms.dpt_transform
+        print(f"Moving model to {DEVICE}...")
+        midas = midas.to(DEVICE)
 
-    # Warm up the model with a dummy pass
-    print("Warming up model...")
-    dummy = torch.randn(1, 3, 384, 384).to(DEVICE)
-    with torch.inference_mode():
-        _ = midas(dummy)
-    torch.cuda.synchronize()
-    print("Model ready!")
+        transforms = torch.hub.load('intel-isl/MiDaS', 'transforms', trust_repo=True)
+        tfm = transforms.small_transform if USE_MIDAS_SMALL else transforms.dpt_transform
 
-    return midas, tfm
+        # Warm up the model with a small dummy pass
+        print("Warming up model (this may take a moment)...")
+        dummy_size = 256 if USE_MIDAS_SMALL else 384
+        dummy = torch.randn(1, 3, dummy_size, dummy_size, device=DEVICE)
+        with torch.inference_mode():
+            _ = midas(dummy)
+            torch.cuda.synchronize()
+        del dummy
+        torch.cuda.empty_cache()
+        print("✓ Model ready!")
+
+        return midas, tfm
+
+    except Exception as e:
+        print(f"❌ Error loading MiDaS: {e}")
+        print("\nTrying to continue with CPU fallback...")
+        raise
 
 
 @torch.inference_mode()
