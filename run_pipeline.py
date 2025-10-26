@@ -12,7 +12,7 @@ import threading
 VIDEO_PATH = "input480.mp4"
 OUT_DIR = Path("outputs_fsr2")
 TARGET_W = None  # None keeps source size
-FLOW_IMPL = "DIS"  # "DIS" or "FARNEBACK"
+FLOW_IMPL = "FARNEBACK"  # Use Farneback (always available)
 NUM_WORKERS = min(32, mp.cpu_count() * 2)  # Use more threads for I/O bound work
 
 # Validate input file
@@ -38,19 +38,18 @@ def estimate_depth_simple(bgr):
 
 
 # ---------- Optical Flow ----------
-_flow_computer = None
-
-
 def compute_optical_flow(prev_gray, curr_gray):
-    """Compute optical flow between two grayscale frames"""
-    global _flow_computer
-    if FLOW_IMPL == "FARNEBACK":
-        flow = cv2.calcOpticalFlowFarneback(prev_gray, curr_gray, None,
-                                            0.5, 3, 15, 3, 5, 1.2, 0)
-    else:
-        if _flow_computer is None:
-            _flow_computer = cv2.optflow.createOptFlow_DIS(cv2.optflow.DISOPTICAL_FLOW_PRESET_FAST)
-        flow = _flow_computer.calc(prev_gray, curr_gray, None)
+    """Compute optical flow using Farneback (fast and always available)"""
+    flow = cv2.calcOpticalFlowFarneback(
+        prev_gray, curr_gray, None,
+        pyr_scale=0.5,  # Pyramid scale
+        levels=3,  # Number of pyramid levels
+        winsize=15,  # Window size
+        iterations=3,  # Iterations at each level
+        poly_n=5,  # Size of pixel neighborhood
+        poly_sigma=1.2,  # Gaussian std for smoothing
+        flags=0
+    )
     return flow.transpose(2, 0, 1).astype(np.float32)
 
 
