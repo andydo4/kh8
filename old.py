@@ -4,7 +4,6 @@
 # curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x2.pb -o FSRCNN_x2.pb
 # curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x4.pb -o FSRCNN_x4.pb
 
-#!/usr/bin/env python3
 """
 Near-live FSRCNN x4 video upscaler with ROCm/OpenCL
 Optimized for minimal latency and maximum throughput using pipeline parallelism.
@@ -22,6 +21,8 @@ import sys
 
 # Suppress OpenCV warnings about OpenCL
 warnings.filterwarnings('ignore')
+
+
 # Redirect stderr to filter OpenCL warnings
 class FilteredStderr:
     def __init__(self):
@@ -34,6 +35,7 @@ class FilteredStderr:
 
     def flush(self):
         self.stderr.flush()
+
 
 sys.stderr = FilteredStderr()
 
@@ -55,18 +57,19 @@ MODEL_NAME = "fsrcnn"
 MODEL_SCALE = 2
 
 # Pipeline tuning (adjust based on your system)
-READ_BUFFER_SIZE = 10      # Frames ahead to read
-WRITE_BUFFER_SIZE = 10     # Frames to buffer before writing
-DISPLAY_PREVIEW = False    # Show live preview window (set False for headless servers)
+READ_BUFFER_SIZE = 10  # Frames ahead to read
+WRITE_BUFFER_SIZE = 10  # Frames to buffer before writing
+DISPLAY_PREVIEW = False  # Show live preview window (set False for headless servers)
 SKIP_FRAMES_ON_OVERLOAD = False  # Drop frames if GPU can't keep up
-BATCH_SIZE = 4             # Process multiple frames at once (experimental)
+BATCH_SIZE = 4  # Process multiple frames at once (experimental)
 
 # --- Validate Files ---
 if not os.path.exists(INPUT_VIDEO):
     raise SystemExit(f"Error: Input video '{INPUT_VIDEO}' not found.")
 if not os.path.exists(MODEL_FILE):
     raise SystemExit(f"Error: Model '{MODEL_FILE}' not found.\n"
-                    f"Download with: curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/{MODEL_FILE} -o {MODEL_FILE}")
+                     f"Download with: curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/{MODEL_FILE} -o {MODEL_FILE}")
+
 
 # --- Performance Metrics ---
 class Metrics:
@@ -90,7 +93,9 @@ class Metrics:
                 self.fps_counter = 0
                 self.last_fps_time = now
 
+
 metrics = Metrics()
+
 
 # --- Initialize Model with ROCm/OpenCL ---
 def setup_model():
@@ -145,6 +150,7 @@ def setup_model():
     print("  Note: OpenCL has known issues with AMD GPUs in OpenCV DNN")
     return sr, "CPU"
 
+
 sr, device = setup_model()
 
 # --- Video Stream Setup ---
@@ -163,16 +169,17 @@ video_writer = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, fps, (new_w, new_h))
 if not video_writer.isOpened():
     raise SystemExit(f"Error: Could not create '{OUTPUT_VIDEO}'")
 
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 print(f"Input:  {orig_w}x{orig_h} @ {fps:.2f} FPS ({frame_count} frames)")
 print(f"Output: {new_w}x{new_h}")
 print(f"Device: {device}")
-print(f"{'='*60}\n")
+print(f"{'=' * 60}\n")
 
 # --- Pipeline Queues ---
 frame_queue = queue.Queue(maxsize=READ_BUFFER_SIZE)
 result_queue = queue.Queue(maxsize=WRITE_BUFFER_SIZE)
 stop_event = threading.Event()
+
 
 # --- Thread 1: Frame Reader ---
 def reader_thread():
@@ -200,6 +207,7 @@ def reader_thread():
     frame_queue.put(None)
     print("\n[Reader] Finished reading all frames")
 
+
 # --- Thread 2: Frame Writer ---
 def writer_thread():
     """Writes upscaled frames to output video"""
@@ -223,7 +231,7 @@ def writer_thread():
                     try:
                         # Display at reduced size for preview
                         preview = cv2.resize(frame_buffer[expected_frame],
-                                            (orig_w * 2, orig_h * 2))
+                                             (orig_w * 2, orig_h * 2))
                         cv2.imshow('Live Upscaling Preview', preview)
                         if cv2.waitKey(1) & 0xFF == ord('q'):
                             stop_event.set()
@@ -241,6 +249,7 @@ def writer_thread():
                 break
 
     print("\n[Writer] Finished writing all frames")
+
 
 # --- Main Thread: GPU Processing ---
 def process_frames():
@@ -282,6 +291,7 @@ def process_frames():
             stop_event.set()
             break
 
+
 def process_batch(frames, frame_nums):
     """Process a batch of frames"""
     start = time.time()
@@ -310,19 +320,21 @@ def process_batch(frames, frame_nums):
 
     gpu_time = (time.time() - start) / len(frames)
 
-    # Status update
-    if metrics.frames_processed % 30 == 0:
-        with metrics.lock:
-            elapsed = time.time() - metrics.start_time
-            progress = (metrics.frames_processed / frame_count) * 100
-            eta = (frame_count - metrics.frames_processed) / metrics.current_fps if metrics.current_fps > 0 else 0
+    # Status update - show every batch
+    with metrics.lock:
+        elapsed = time.time() - metrics.start_time
+        progress = (metrics.frames_processed / frame_count) * 100
+        eta = (frame_count - metrics.frames_processed) / metrics.current_fps if metrics.current_fps > 0 else 0
 
+        # Update more frequently
+        if metrics.frames_processed % 10 == 0 or True:
             print(f"Progress: {progress:5.1f}% | "
                   f"FPS: {metrics.current_fps:5.1f} | "
-                  f"GPU: {gpu_time*1000:5.1f}ms | "
+                  f"GPU: {gpu_time * 1000:5.1f}ms | "
                   f"Batch: {len(frames)} | "
                   f"Queue: R={frame_queue.qsize():2d} W={result_queue.qsize():2d} | "
                   f"ETA: {int(eta)}s", end='\r')
+
 
 # --- Start Pipeline ---
 reader = threading.Thread(target=reader_thread, daemon=True)
@@ -341,21 +353,29 @@ except KeyboardInterrupt:
 reader.join(timeout=5.0)
 writer.join(timeout=5.0)
 
-# --- Cleanup & Statistics ---
+# Calculate final statistics
+elapsed = time.time() - metrics.start_time
+
+# --- Cleanup ---
 cap.release()
 video_writer.release()
-cv2.destroyAllWindows()
+try:
+    cv2.destroyAllWindows()
+except:
+    pass  # Ignore on headless systems
 
-elapsed = time.time() - metrics.start_time
-print(f"\n\n{'='*60}")
+# --- Print Statistics ---
+print(f"\n\n{'=' * 60}")
 print("PROCESSING COMPLETE")
-print(f"{'='*60}")
+print(f"{'=' * 60}")
 print(f"Total time:       {elapsed:.2f}s")
 print(f"Frames read:      {metrics.frames_read}")
 print(f"Frames processed: {metrics.frames_processed}")
 print(f"Frames written:   {metrics.frames_written}")
 if metrics.frames_dropped > 0:
     print(f"Frames dropped:   {metrics.frames_dropped}")
-print(f"Average FPS:      {metrics.frames_processed / elapsed:.2f}")
+avg_fps = metrics.frames_processed / elapsed if elapsed > 0 else 0
+print(f"Average FPS:      {avg_fps:.2f}")
+print(f"Speedup factor:   {avg_fps / fps:.2f}x (1.0x = real-time)")
 print(f"Output saved:     '{OUTPUT_VIDEO}'")
-print(f"{'='*60}\n")
+print(f"{'=' * 60}\n")
