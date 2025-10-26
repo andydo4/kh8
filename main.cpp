@@ -12,8 +12,6 @@
 #include <sstream>
 #include <iomanip>
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image.h"
 #include "stb_image_write.h"
 
@@ -312,6 +310,12 @@ int main(int argc, char** argv){
     // Initialize FSR2 with v1.1.2 API
     FfxFsr2Context fsr{};
     {
+        // Create VkDeviceContext for FFX
+        VkDeviceContext vkDeviceContext{};
+        vkDeviceContext.vkDevice = C.device;
+        vkDeviceContext.vkPhysicalDevice = C.pdev;
+        vkDeviceContext.vkDeviceProcAddr = vkGetDeviceProcAddr;
+
         // Get scratch buffer size
         size_t scratchSize = ffxGetScratchMemorySizeVK(C.pdev, 1);
         void* scratchBuffer = malloc(scratchSize);
@@ -320,7 +324,7 @@ int main(int argc, char** argv){
         FfxInterface backendInterface{};
         FfxErrorCode ec = ffxGetInterfaceVK(
             &backendInterface,
-            ffxGetDeviceVK(C.device),
+            ffxGetDeviceVK(&vkDeviceContext),
             scratchBuffer,
             scratchSize,
             1);
