@@ -5,7 +5,7 @@ import os
 # from upscale_process import run_upscaling_logic
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_secret_key!' # Change this!
+app.config['SECRET_KEY'] = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE3GGKQ44NbwKY/jVFnhGiKzJasUWJAK31JHiINDzTAC server' 
 # Allow uploads up to a certain size (e.g., 500MB)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
 socketio = SocketIO(app, cors_allowed_origins="*") # Allow connections
