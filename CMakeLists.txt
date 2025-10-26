@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ---- EDIT THIS: path to your FidelityFX SDK clone ----
 #   git clone https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git
-set(FFX_SDK_DIR "/abs/path/to/FidelityFX-SDK")
+set(FFX_SDK_DIR "/home/amd-knights/code/FidelityFX-SDK")
 
 find_package(Vulkan REQUIRED)
 
