@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+:root {
+  --blue: #3a86ff;
+}
+
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
