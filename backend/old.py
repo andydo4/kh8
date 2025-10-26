@@ -225,50 +225,49 @@ def upscale_video(input_path, output_folder, model_path=None, scale_factor=None,
 
     # ... (process_batch remains the same, including SocketIO emit) ...
     def process_batch(frames, frame_nums):
-    """Processes a batch, emits progress, puts results in queue."""
-    if not frames: return
-    batch_start_time = time.time()
-    try:
-        # --- Preprocessing: Prepare Y channel for NHWC format ---
-        batch_input_y = []
-        original_crcb = []
-        for frame in frames:
-            img_ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
-            img_y = img_ycrcb[:, :, 0]
-            original_crcb.append(img_ycrcb[:, :, 1:]) # Keep CrCb
+        if not frames: return
+        batch_start_time = time.time()
+        try:
+            # --- Preprocessing: Prepare Y channel for NHWC format ---
+            batch_input_y = []
+            original_crcb = []
+            for frame in frames:
+                img_ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
+                img_y = img_ycrcb[:, :, 0]
+                original_crcb.append(img_ycrcb[:, :, 1:]) # Keep CrCb
 
-            # Normalize Y
-            img_y_norm = img_y.astype(np.float32) / 255.0
-            # Add Channel dimension at the end -> (H, W, 1)
-            img_y_hwc = np.expand_dims(img_y_norm, axis=-1)
-            batch_input_y.append(img_y_hwc)
+                # Normalize Y
+                img_y_norm = img_y.astype(np.float32) / 255.0
+                # Add Channel dimension at the end -> (H, W, 1)
+                img_y_hwc = np.expand_dims(img_y_norm, axis=-1)
+                batch_input_y.append(img_y_hwc)
 
-        # Stack along the batch dimension -> (N, H, W, 1)
-        batch_input = np.stack(batch_input_y, axis=0)
-        # --- End Preprocessing Change ---
+            # Stack along the batch dimension -> (N, H, W, 1)
+            batch_input = np.stack(batch_input_y, axis=0)
+            # --- End Preprocessing Change ---
 
-        # Run inference
-        outputs = session.run([output_name], {input_name: batch_input})
-        # Output shape might now be (N, H_new, W_new, 1)
-        upscaled_batch_y = outputs[0]
+            # Run inference
+            outputs = session.run([output_name], {input_name: batch_input})
+            # Output shape might now be (N, H_new, W_new, 1)
+            upscaled_batch_y = outputs[0]
 
-        # --- Postprocessing: Handle NHWC output ---
-        for i, upscaled_y_nhwc in enumerate(upscaled_batch_y):
-            # Squeeze the last dimension (Channel) -> (H_new, W_new)
-            upscaled_y = np.clip(upscaled_y_nhwc.squeeze(axis=-1) * 255.0, 0, 255).astype(np.uint8)
+            # --- Postprocessing: Handle NHWC output ---
+            for i, upscaled_y_nhwc in enumerate(upscaled_batch_y):
+                # Squeeze the last dimension (Channel) -> (H_new, W_new)
+                upscaled_y = np.clip(upscaled_y_nhwc.squeeze(axis=-1) * 255.0, 0, 255).astype(np.uint8)
 
-            # Resize original CrCb channels
-            h_new, w_new = upscaled_y.shape
-            resized_crcb = cv2.resize(original_crcb[i], (w_new, h_new), interpolation=cv2.INTER_CUBIC)
+                # Resize original CrCb channels
+                h_new, w_new = upscaled_y.shape
+                resized_crcb = cv2.resize(original_crcb[i], (w_new, h_new), interpolation=cv2.INTER_CUBIC)
 
-            # Merge YCrCb and convert back to BGR
-            final_ycrcb = cv2.merge((upscaled_y, resized_crcb))
-            final_frame_bgr = cv2.cvtColor(final_ycrcb, cv2.COLOR_YCrCb2BGR)
-            # --- End Postprocessing Change ---
+                # Merge YCrCb and convert back to BGR
+                final_ycrcb = cv2.merge((upscaled_y, resized_crcb))
+                final_frame_bgr = cv2.cvtColor(final_ycrcb, cv2.COLOR_YCrCb2BGR)
+                # --- End Postprocessing Change ---
 
-            result_queue.put((frame_nums[i], final_frame_bgr))
+                result_queue.put((frame_nums[i], final_frame_bgr))
 
-        # ... (rest of process_batch, including progress emission, remains the same) ...
+            # ... (rest of process_batch, including progress emission, remains the same) ...
         except Exception as e:
             print(f"\n[ERROR] Batch processing failed: {e}")
             traceback.print_exc()
