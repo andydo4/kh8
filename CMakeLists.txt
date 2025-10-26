@@ -10,11 +10,6 @@ find_package(Vulkan REQUIRED)
 
 add_executable(fsr2_vulkan_min main.cpp)
 
-# Add this before add_executable or after it, either works
-file(GLOB FFX_SOURCES
-  "${FFX_SDK_DIR}/sdk/src/ffx_fsr2.cpp"
-  "${FFX_SDK_DIR}/sdk/src/backends/vk/ffx_vk.cpp"
-)
 
 add_executable(fsr2_vulkan_min main.cpp ${FFX_SOURCES})
 
