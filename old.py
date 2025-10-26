@@ -7,6 +7,9 @@
 """
 ONNX Runtime FSRCNN x2 video upscaler with ROCm acceleration
 Properly utilizes AMD GPUs via ROCm ExecutionProvider
+
+FIX: Prioritized ROCMExecutionProvider over MIGraphXExecutionProvider to fix
+compiler warnings and improve performance.
 """
 
 import os
@@ -156,20 +159,21 @@ def setup_onnx_session():
     sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     sess_options.intra_op_num_threads = os.cpu_count()
 
-    # Try ROCm provider first, then CUDA, then CPU
+    # --- FIX: Prioritize ROCMExecutionProvider for stability/speed ---
     provider_preference = [
-        ('MIGraphXExecutionProvider', {
-            'device_id': 0,
-        }),
         ('ROCMExecutionProvider', {
             'device_id': 0,
             'arena_extend_strategy': 'kNextPowerOfTwo',
             'gpu_mem_limit': 16 * 1024 * 1024 * 1024,  # 16GB
             'do_copy_in_default_stream': True,
         }),
+        ('MIGraphXExecutionProvider', {
+            'device_id': 0,
+        }),
         ('CUDAExecutionProvider', {'device_id': 0}),
         'CPUExecutionProvider'
     ]
+    # -----------------------------------------------------------------
 
     session = None
     used_provider = None
