@@ -1,5 +1,5 @@
 // main.cpp - FSR2 v1.1.2 SDK compatible version
-// NEW PUSH
+
 #include <vulkan/vulkan.h>
 #include <cassert>
 #include <cstdio>

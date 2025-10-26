@@ -1,6 +1,5 @@
 #!/bin/bash
 # Complete pipeline to upscale video with FSR2
-# NEW PUSH
 
 set -e  # Exit on error
 
