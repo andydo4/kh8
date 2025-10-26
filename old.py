@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
 # If needed, download the model with:
-#curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x2.pb -o FSRCNN_x2.pb
+# curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x2.pb -o FSRCNN_x2.pb
 # curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x4.pb -o FSRCNN_x4.pb
 
+#!/usr/bin/env python3
 """
-Near-live FSRCNN x2 video upscaler with ROCm/OpenCL
+Near-live FSRCNN x4 video upscaler with ROCm/OpenCL
 Optimized for minimal latency and maximum throughput using pipeline parallelism.
 """
 
@@ -58,6 +59,7 @@ READ_BUFFER_SIZE = 10      # Frames ahead to read
 WRITE_BUFFER_SIZE = 10     # Frames to buffer before writing
 DISPLAY_PREVIEW = False    # Show live preview window (set False for headless servers)
 SKIP_FRAMES_ON_OVERLOAD = False  # Drop frames if GPU can't keep up
+BATCH_SIZE = 4             # Process multiple frames at once (experimental)
 
 # --- Validate Files ---
 if not os.path.exists(INPUT_VIDEO):
@@ -96,6 +98,9 @@ def setup_model():
     sr = cv2.dnn_superres.DnnSuperResImpl_create()
     sr.readModel(MODEL_FILE)
     sr.setModel(MODEL_NAME, MODEL_SCALE)
+
+    # Enable multi-threading for CPU
+    cv2.setNumThreads(os.cpu_count())
 
     # Always use OpenCV backend
     sr.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
@@ -242,59 +247,82 @@ def process_frames():
     """Main processing loop - upscales frames using GPU"""
     print("[Processor] Starting GPU processing...\n")
 
+    frame_batch = []
+    frame_nums = []
+
     while not stop_event.is_set():
         try:
             item = frame_queue.get(timeout=0.1)
             if item is None:  # End signal
+                # Process remaining frames in batch
+                if frame_batch:
+                    process_batch(frame_batch, frame_nums)
                 result_queue.put(None)
                 break
 
             frame_num, frame = item
+            frame_batch.append(frame)
+            frame_nums.append(frame_num)
 
-            # GPU upscaling (this is the bottleneck)
-            start = time.time()
-            try:
-                upscaled = sr.upsample(frame)
+            # Process when batch is full or queue is empty
+            if len(frame_batch) >= BATCH_SIZE or frame_queue.qsize() == 0:
+                process_batch(frame_batch, frame_nums)
+                frame_batch = []
+                frame_nums = []
 
-                # Validate output shape
-                expected_h = frame.shape[0] * MODEL_SCALE
-                expected_w = frame.shape[1] * MODEL_SCALE
-                if upscaled.shape != (expected_h, expected_w, 3):
-                    raise Exception(f"Invalid output shape: {upscaled.shape}, expected ({expected_h}, {expected_w}, 3)")
+        except queue.Empty:
+            # Process any accumulated frames
+            if frame_batch:
+                process_batch(frame_batch, frame_nums)
+                frame_batch = []
+                frame_nums = []
+            continue
+        except Exception as e:
+            print(f"\n[ERROR] Processing failed: {e}")
+            stop_event.set()
+            break
 
-            except Exception as e:
-                print(f"\n[ERROR] Frame {frame_num} upscaling failed: {e}")
-                stop_event.set()
-                break
+def process_batch(frames, frame_nums):
+    """Process a batch of frames"""
+    start = time.time()
 
-            gpu_time = time.time() - start
+    for i, frame in enumerate(frames):
+        try:
+            upscaled = sr.upsample(frame)
 
-            result_queue.put((frame_num, upscaled))
+            # Validate output shape
+            expected_h = frame.shape[0] * MODEL_SCALE
+            expected_w = frame.shape[1] * MODEL_SCALE
+            if upscaled.shape != (expected_h, expected_w, 3):
+                raise Exception(f"Invalid output shape: {upscaled.shape}, expected ({expected_h}, {expected_w}, 3)")
+
+            result_queue.put((frame_nums[i], upscaled))
 
             with metrics.lock:
                 metrics.frames_processed += 1
 
             metrics.update_fps()
 
-            # Status update
-            if metrics.frames_processed % 30 == 0:
-                with metrics.lock:
-                    elapsed = time.time() - metrics.start_time
-                    progress = (metrics.frames_processed / frame_count) * 100
-                    eta = (frame_count - metrics.frames_processed) / metrics.current_fps if metrics.current_fps > 0 else 0
-
-                    print(f"Progress: {progress:5.1f}% | "
-                          f"FPS: {metrics.current_fps:5.1f} | "
-                          f"GPU: {gpu_time*1000:5.1f}ms | "
-                          f"Queue: R={frame_queue.qsize():2d} W={result_queue.qsize():2d} | "
-                          f"ETA: {int(eta)}s", end='\r')
-
-        except queue.Empty:
-            continue
         except Exception as e:
-            print(f"\n[ERROR] Processing failed: {e}")
+            print(f"\n[ERROR] Frame {frame_nums[i]} upscaling failed: {e}")
             stop_event.set()
-            break
+            return
+
+    gpu_time = (time.time() - start) / len(frames)
+
+    # Status update
+    if metrics.frames_processed % 30 == 0:
+        with metrics.lock:
+            elapsed = time.time() - metrics.start_time
+            progress = (metrics.frames_processed / frame_count) * 100
+            eta = (frame_count - metrics.frames_processed) / metrics.current_fps if metrics.current_fps > 0 else 0
+
+            print(f"Progress: {progress:5.1f}% | "
+                  f"FPS: {metrics.current_fps:5.1f} | "
+                  f"GPU: {gpu_time*1000:5.1f}ms | "
+                  f"Batch: {len(frames)} | "
+                  f"Queue: R={frame_queue.qsize():2d} W={result_queue.qsize():2d} | "
+                  f"ETA: {int(eta)}s", end='\r')
 
 # --- Start Pipeline ---
 reader = threading.Thread(target=reader_thread, daemon=True)
