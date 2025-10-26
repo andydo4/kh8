@@ -55,7 +55,10 @@ def infer_depth_midas(midas, tfm, bgr):
         inp = tfm(rgb)
         if DEVICE != "cpu":
             inp = inp.to(DEVICE)
-        pred = midas(inp.unsqueeze(0))
+        # Ensure input has batch dimension
+        if inp.dim() == 3:
+            inp = inp.unsqueeze(0)
+        pred = midas(inp)
         depth = pred.squeeze().float().cpu().numpy()
     return depth  # relative (bigger ~ farther)
 
