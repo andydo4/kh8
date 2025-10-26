@@ -42,7 +42,6 @@ WRITE_BUFFER_SIZE = 20
 BATCH_SIZE = 8  # Process multiple frames at once
 DISPLAY_PREVIEW = False
 
-
 # --- Step 1: Convert TensorFlow model to ONNX if needed ---
 def convert_pb_to_onnx():
     """Convert FSRCNN_x2.pb to ONNX format"""
@@ -95,7 +94,6 @@ def convert_pb_to_onnx():
         print("\nAlternative: Use the OpenCV version or manually convert the model")
         return False
 
-
 # --- Performance Metrics ---
 class Metrics:
     def __init__(self):
@@ -117,9 +115,7 @@ class Metrics:
                 self.fps_counter = 0
                 self.last_fps_time = now
 
-
 metrics = Metrics()
-
 
 # --- Initialize ONNX Runtime with ROCm ---
 def setup_onnx_session():
@@ -190,11 +186,10 @@ def setup_onnx_session():
 
     return session, input_name, output_name, used_provider
 
-
 # --- Video Setup ---
-print(f"\n{'=' * 60}")
+print(f"\n{'='*60}")
 print("ONNX Runtime ROCm Video Upscaler")
-print(f"{'=' * 60}")
+print(f"{'='*60}")
 
 if not os.path.exists(INPUT_VIDEO):
     print(f"ERROR: Input video '{INPUT_VIDEO}' not found")
@@ -223,13 +218,12 @@ print(f"\nInput:  {orig_w}x{orig_h} @ {fps:.2f} FPS ({frame_count} frames)")
 print(f"Output: {new_w}x{new_h}")
 print(f"Device: {device}")
 print(f"Batch size: {BATCH_SIZE}")
-print(f"{'=' * 60}\n")
+print(f"{'='*60}\n")
 
 # --- Pipeline Queues ---
 frame_queue = queue.Queue(maxsize=READ_BUFFER_SIZE)
 result_queue = queue.Queue(maxsize=WRITE_BUFFER_SIZE)
 stop_event = threading.Event()
-
 
 # --- Thread 1: Frame Reader ---
 def reader_thread():
@@ -250,7 +244,6 @@ def reader_thread():
 
     frame_queue.put(None)
     print("\n[Reader] Finished reading all frames")
-
 
 # --- Thread 2: Frame Writer ---
 def writer_thread():
@@ -280,7 +273,6 @@ def writer_thread():
                 break
 
     print("\n[Writer] Finished writing all frames")
-
 
 # --- Main Thread: ONNX Inference ---
 def process_frames():
@@ -317,23 +309,28 @@ def process_frames():
                 frame_nums = []
             continue
 
-
 def process_batch(frames, frame_nums):
     """Process a batch of frames through ONNX Runtime"""
     start = time.time()
 
     try:
-        # Prepare batch
-        # FSRCNN expects input shape: [batch, height, width, channels]
-        batch_input = np.stack([frame.astype(np.float32) for frame in frames])
+        # Convert frames from OpenCV (HWC) to PyTorch format (CHW)
+        # OpenCV: (height, width, channels) -> PyTorch: (channels, height, width)
+        batch_input = np.stack([
+            np.transpose(frame.astype(np.float32) / 255.0, (2, 0, 1))  # Normalize and transpose
+            for frame in frames
+        ])
 
         # Run inference
         outputs = session.run([output_name], {input_name: batch_input})
         upscaled_batch = outputs[0]
 
-        # Convert back to uint8 and queue results
+        # Convert back from PyTorch format (NCHW) to OpenCV format (NHWC)
         for i, upscaled in enumerate(upscaled_batch):
-            upscaled = np.clip(upscaled, 0, 255).astype(np.uint8)
+            # Transpose back: (C, H, W) -> (H, W, C)
+            upscaled = np.transpose(upscaled, (1, 2, 0))
+            # Denormalize and convert to uint8
+            upscaled = np.clip(upscaled * 255.0, 0, 255).astype(np.uint8)
             result_queue.put((frame_nums[i], upscaled))
 
         with metrics.lock:
@@ -353,7 +350,7 @@ def process_batch(frames, frame_nums):
             if metrics.frames_processed % 50 == 0 or metrics.frames_processed < 50:
                 print(f"Progress: {progress:5.1f}% | "
                       f"FPS: {metrics.current_fps:6.1f} | "
-                      f"Batch: {len(frames):2d} frames in {batch_time * 1000:5.1f}ms | "
+                      f"Batch: {len(frames):2d} frames in {batch_time*1000:5.1f}ms | "
                       f"Queue: R={frame_queue.qsize():2d} W={result_queue.qsize():2d} | "
                       f"ETA: {int(eta):3d}s", end='\r')
 
@@ -362,7 +359,6 @@ def process_batch(frames, frame_nums):
         import traceback
         traceback.print_exc()
         stop_event.set()
-
 
 # --- Start Pipeline ---
 reader = threading.Thread(target=reader_thread, daemon=True)
@@ -389,9 +385,9 @@ cap.release()
 video_writer.release()
 
 # Statistics
-print(f"\n\n{'=' * 60}")
+print(f"\n\n{'='*60}")
 print("PROCESSING COMPLETE")
-print(f"{'=' * 60}")
+print(f"{'='*60}")
 print(f"Total time:       {elapsed:.2f}s")
 print(f"Frames read:      {metrics.frames_read}")
 print(f"Frames processed: {metrics.frames_processed}")
@@ -401,4 +397,4 @@ print(f"Average FPS:      {avg_fps:.2f}")
 print(f"Speedup factor:   {avg_fps / fps:.2f}x (1.0x = real-time)")
 print(f"Device used:      {device}")
 print(f"Output saved:     '{OUTPUT_VIDEO}'")
-print(f"{'=' * 60}\n")
+print(f"{'='*60}\n")
