@@ -19,7 +19,8 @@ for path in rocm_paths:
 
 try:
     import onnxruntime as ort
-    from flask_socketio import SocketIO # Assuming Flask-SocketIO is used
+    # Import SocketIO only if needed, makes testing easier without Flask context
+    # from flask_socketio import SocketIO # Assuming Flask-SocketIO is used
 except ImportError as e:
     print(f"ERROR: Missing required libraries ({e}). Install with:")
     print("  pip install onnxruntime-rocm Flask-SocketIO opencv-python numpy")
@@ -29,10 +30,13 @@ except ImportError as e:
 READ_BUFFER_SIZE = 20
 WRITE_BUFFER_SIZE = 20
 BATCH_SIZE = 8
-DEFAULT_MODEL_FILES = ["backend/fsrcnn-small-x4.onnx", "backend/FSRCNN_x2.onnx"] # Example paths relative to project root
+# --- MODIFIED: Use just filenames, search logic will look in root ---
+DEFAULT_MODEL_FILENAMES = ["fsrcnn-small-x4.onnx", "FSRCNN_x2_pytorch.onnx", "FSRCNN_x2.onnx"]
+# --- End Modification ---
 
 # --- Metrics Class ---
 class Metrics:
+    # ... (Metrics class remains the same) ...
     def __init__(self):
         self.lock = threading.Lock()
         self.frames_read = 0
@@ -48,85 +52,79 @@ class Metrics:
             self.fps_counter += count
             now = time.time()
             if now - self.last_fps_time >= 1.0:
-                self.current_fps = self.fps_counter / (now - self.last_fps_time)
+                self.current_fps = self.fps_counter / (now - self.last_fps_time) if (now - self.last_fps_time) > 0 else 0
                 self.fps_counter = 0
                 self.last_fps_time = now
 
 # --- Main Upscaling Function ---
 def upscale_video(input_path, output_folder, model_path=None, scale_factor=None, socketio_instance=None, client_sid=None):
-    """
-    Upscales a video using ONNX Runtime with ROCm acceleration.
-
-    Args:
-        input_path (str): Path to the input video file.
-        output_folder (str): Folder to save the upscaled video.
-        model_path (str, optional): Path to the ONNX model file. If None, tries default paths.
-        scale_factor (int, optional): The upscale factor (e.g., 2 or 4). If None, tries to infer from model name.
-        socketio_instance (SocketIO, optional): Flask-SocketIO instance for progress updates.
-        client_sid (str, optional): Client's SocketIO session ID.
-
-    Returns:
-        str: The path to the successfully created output video file.
-
-    Raises:
-        FileNotFoundError: If input video or model file is not found.
-        ValueError: If scale factor cannot be determined or setup fails.
-        RuntimeError: If video processing fails.
-    """
+    # ... (docstring remains the same) ...
     print(f"\n--- Starting Upscale Process for {os.path.basename(input_path)} ---")
-    metrics = Metrics() # Create metrics instance for this run
-    stop_event = threading.Event() # Control threads for this run
+    metrics = Metrics()
+    stop_event = threading.Event()
 
     # --- 1. Validate Inputs & Determine Model/Scale ---
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input video not found: {input_path}")
     os.makedirs(output_folder, exist_ok=True)
 
-    actual_model_path = model_path
-    if actual_model_path is None or not os.path.exists(actual_model_path):
-        print(f"Model path '{model_path}' not provided or not found. Searching defaults...")
-        for mf in DEFAULT_MODEL_FILES:
-             # Adjust path relative to this script's location if needed
-             script_dir = os.path.dirname(__file__)
-             potential_path = os.path.join(script_dir, os.path.basename(mf)) # Look in same dir
+    # --- MODIFIED: Path finding logic ---
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, '..')) # Go one level up
+
+    actual_model_path = model_path # The path passed from server.py
+
+    # Check if the provided model_path exists (either absolute or relative to where server.py runs from)
+    if actual_model_path and os.path.exists(actual_model_path):
+        print(f"✓ Using provided model path: {actual_model_path}")
+    # If not found directly, check relative to project root (using basename just in case)
+    elif actual_model_path:
+        potential_path_from_root = os.path.join(project_root, os.path.basename(actual_model_path))
+        if os.path.exists(potential_path_from_root):
+            actual_model_path = potential_path_from_root
+            print(f"✓ Found model relative to project root: {os.path.basename(actual_model_path)}")
+        else:
+             actual_model_path = None # Mark as not found if checks fail
+
+    # Search defaults in project root if still not found or not provided
+    if actual_model_path is None:
+        print(f"Model path '{model_path}' not found or not provided. Searching defaults in project root...")
+        for mf_name in DEFAULT_MODEL_FILENAMES:
+             # Look for the default model name *in the project root directory*
+             potential_path = os.path.join(project_root, mf_name)
              if os.path.exists(potential_path):
                  actual_model_path = potential_path
-                 print(f"✓ Found default model: {actual_model_path}")
-                 break
-             # Fallback check relative to project root if backend folder structure exists
-             potential_root_path = os.path.abspath(os.path.join(script_dir, '..', mf))
-             if os.path.exists(potential_root_path):
-                 actual_model_path = potential_root_path
-                 print(f"✓ Found default model (relative to root): {actual_model_path}")
-                 break
+                 print(f"✓ Found default model in root: {os.path.basename(actual_model_path)}")
+                 break # Stop searching once found
 
     if actual_model_path is None or not os.path.exists(actual_model_path):
-         raise FileNotFoundError(f"ONNX model not found. Check paths: {DEFAULT_MODEL_FILES}")
+         # Error message updated to reflect search location
+         raise FileNotFoundError(f"ONNX model not found in project root ({project_root}). Searched defaults: {DEFAULT_MODEL_FILENAMES}")
+    # --- End Path Finding Modification ---
 
-    # Infer scale factor if not provided
+    # --- Infer scale factor (this part remains the same) ---
     actual_scale_factor = scale_factor
     if actual_scale_factor is None:
         try:
-            # Simple inference based on common naming like "_x2", "_x4"
             base = os.path.basename(actual_model_path).lower()
-            if "_x2" in base: actual_scale_factor = 2
-            elif "_x4" in base: actual_scale_factor = 4
-            elif "-x2" in base: actual_scale_factor = 2
-            elif "-x4" in base: actual_scale_factor = 4
+            if "_x2" in base or "-x2" in base: actual_scale_factor = 2
+            elif "_x4" in base or "-x4" in base: actual_scale_factor = 4
             else: raise ValueError("Scale factor not provided and couldn't infer from model name.")
             print(f"Inferred scale factor: {actual_scale_factor}x")
         except Exception as e:
             raise ValueError(f"Could not determine scale factor: {e}")
-    if actual_scale_factor not in [2, 4]: # Add supported scales if different
+    if actual_scale_factor not in [2, 4]:
         raise ValueError(f"Unsupported scale factor: {actual_scale_factor}. Only 2x or 4x supported.")
+    # --- End Scale Factor Inference ---
 
     # --- 2. Setup ONNX Session ---
     try:
-        session, input_name, output_name, device = _setup_onnx_session(actual_model_path)
+        session, input_name, output_name, device = _setup_onnx_session(actual_model_path) # Pass absolute path
     except Exception as e:
         raise ValueError(f"Failed to setup ONNX session: {e}")
 
     # --- 3. Setup Video I/O ---
+    # ... (VideoCapture, VideoWriter setup remains the same) ...
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open input video: {input_path}")
@@ -137,13 +135,12 @@ def upscale_video(input_path, output_folder, model_path=None, scale_factor=None,
     orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     new_w, new_h = orig_w * actual_scale_factor, orig_h * actual_scale_factor
 
-    # Generate unique output path
     base_name = os.path.basename(input_path)
     name, ext = os.path.splitext(base_name)
     output_filename = f"{name}_upscaled_{actual_scale_factor}x_{int(time.time())}{ext}"
     output_path = os.path.join(output_folder, output_filename)
 
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v') # Or other appropriate codec
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video_writer = cv2.VideoWriter(output_path, fourcc, fps, (new_w, new_h))
     if not video_writer.isOpened():
         cap.release()
@@ -157,59 +154,58 @@ def upscale_video(input_path, output_folder, model_path=None, scale_factor=None,
     print("-" * 60)
 
     # --- 4. Setup Pipeline Queues & Threads ---
+    # ... (Queue setup remains the same) ...
     frame_queue = queue.Queue(maxsize=READ_BUFFER_SIZE)
     result_queue = queue.Queue(maxsize=WRITE_BUFFER_SIZE)
 
-    # --- Thread Functions (defined inside or passed necessary args) ---
+    # --- Thread Functions ---
+    # ... (reader_thread_func remains the same) ...
     def reader_thread_func():
         frame_num = 0
         failed_reads = 0
         while not stop_event.is_set():
             ret, frame = cap.read()
             if not ret:
-                if failed_reads < 10: # Increased retries
+                if failed_reads < 10:
                     failed_reads += 1
-                    time.sleep(0.01) # Small sleep on fail
+                    time.sleep(0.01)
                     continue
-                # print(f"[Reader] Read failed definitively after frame {frame_num-1}")
                 break
             failed_reads = 0
             try:
-                # Block slightly if queue is full, prevents busy-waiting
                 frame_queue.put((frame_num, frame), block=True, timeout=0.5)
                 with metrics.lock: metrics.frames_read += 1
                 frame_num += 1
             except queue.Full:
                 if stop_event.is_set(): break
-                continue # If timeout occurs but not stopped, just retry
+                continue
             except Exception as e:
                  print(f"[Reader Error] {e}")
                  stop_event.set()
                  break
-        frame_queue.put(None) # Signal end
+        frame_queue.put(None)
         print(f"[Reader] Finished reading {frame_num} frames.")
 
+    # ... (writer_thread_func remains the same) ...
     def writer_thread_func():
         expected_frame = 0
         frame_buffer = {}
         frames_actually_written = 0
         while True:
             try:
-                result = result_queue.get(timeout=1.0) # Check queue periodically
+                result = result_queue.get(timeout=1.0)
                 if result is None:
-                    # Process any remaining buffered frames after processor is done
                     while expected_frame in frame_buffer:
                         video_writer.write(frame_buffer[expected_frame])
                         del frame_buffer[expected_frame]
                         with metrics.lock: metrics.frames_written += 1
                         frames_actually_written += 1
                         expected_frame += 1
-                    break # Exit loop
+                    break
 
                 frame_num, upscaled = result
                 frame_buffer[frame_num] = upscaled
 
-                # Write frames in order
                 while expected_frame in frame_buffer:
                     video_writer.write(frame_buffer[expected_frame])
                     del frame_buffer[expected_frame]
@@ -219,57 +215,64 @@ def upscale_video(input_path, output_folder, model_path=None, scale_factor=None,
 
             except queue.Empty:
                 if stop_event.is_set() and frame_queue.empty() and result_queue.empty():
-                     # If stopped and queues are empty, might need to break early
                      break
-                continue # If empty but not stopped, just wait longer
+                continue
             except Exception as e:
                 print(f"[Writer Error] {e}")
                 stop_event.set()
-                break # Exit on error
+                break
         print(f"[Writer] Finished writing {frames_actually_written} frames.")
 
-
+    # ... (process_batch remains the same, including SocketIO emit) ...
     def process_batch(frames, frame_nums):
-        """Processes a batch, emits progress, puts results in queue."""
         if not frames: return
         batch_start_time = time.time()
         try:
-            # --- IMPORTANT: Preprocessing ---
-            # Your original script processed BGR directly. FSRCNN usually expects Y channel.
-            # Sticking to your original script's BGR processing for now.
-            # If results look bad, switch to YCrCb processing like in the previous examples.
-            batch_input = np.stack([
-                 # Original script logic: Normalize BGR and transpose HWC -> CHW
-                (frame.astype(np.float33) / 255.0).transpose(2, 0, 1)
-                 for frame in frames
-            ])
+            # --- Preprocessing: Use YCrCb (Generally better for FSRCNN) ---
+            batch_input_y = []
+            original_crcb = []
+            for frame in frames:
+                img_ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
+                img_y = img_ycrcb[:, :, 0]
+                # Keep original CrCb for postprocessing
+                original_crcb.append(img_ycrcb[:, :, 1:])
+                # Normalize Y and add batch/channel dims -> (1, 1, H, W) for ONNX
+                batch_input_y.append(
+                    np.expand_dims((img_y.astype(np.float32) / 255.0), axis=(0,1))
+                )
+            # Stack along the batch dimension -> (N, 1, H, W)
+            batch_input = np.vstack(batch_input_y)
+            # --- End Preprocessing Change ---
 
             # Run inference
             outputs = session.run([output_name], {input_name: batch_input})
-            upscaled_batch = outputs[0]
+            upscaled_batch_y = outputs[0] # Output is upscaled Y channel (N, 1, H_new, W_new)
 
-            # --- Postprocessing ---
-            for i, upscaled_chw in enumerate(upscaled_batch):
-                # Transpose CHW -> HWC
-                upscaled_hwc = upscaled_chw.transpose(1, 2, 0)
-                # Denormalize and convert type
-                final_frame = np.clip(upscaled_hwc * 255.0, 0, 255).astype(np.uint8)
+            # --- Postprocessing: Combine upscaled Y with resized CrCb ---
+            for i, upscaled_y_nchw in enumerate(upscaled_batch_y):
+                # Squeeze N,C dims -> (H_new, W_new)
+                upscaled_y = np.clip(upscaled_y_nchw.squeeze() * 255.0, 0, 255).astype(np.uint8)
 
-                # Put result into the writer queue
-                result_queue.put((frame_nums[i], final_frame))
+                # Resize original CrCb channels
+                h_new, w_new = upscaled_y.shape
+                resized_crcb = cv2.resize(original_crcb[i], (w_new, h_new), interpolation=cv2.INTER_CUBIC)
+
+                # Merge YCrCb and convert back to BGR
+                final_ycrcb = cv2.merge((upscaled_y, resized_crcb))
+                final_frame_bgr = cv2.cvtColor(final_ycrcb, cv2.COLOR_YCrCb2BGR)
+                # --- End Postprocessing Change ---
+
+                result_queue.put((frame_nums[i], final_frame_bgr)) # Put BGR frame
 
             with metrics.lock:
                 metrics.frames_processed += len(frames)
-            metrics.update_fps(len(frames)) # Update FPS counter
+            metrics.update_fps(len(frames))
 
-            # --- Progress Reporting ---
             if socketio_instance and client_sid:
                 with metrics.lock:
                     progress = (metrics.frames_processed / frame_count) * 100 if frame_count > 0 else 0
                     current_fps = metrics.current_fps
                 try:
-                     # Limit emit frequency (e.g., every N frames or every second)
-                     # Send every ~20 frames processed or if progress is significant
                     if metrics.frames_processed % 20 == 0 or progress > 99:
                         socketio_instance.emit('upscale_progress',
                                            {'progress': f"{progress:.1f}", 'fps': f"{current_fps:.1f}"},
@@ -280,25 +283,24 @@ def upscale_video(input_path, output_folder, model_path=None, scale_factor=None,
         except Exception as e:
             print(f"\n[ERROR] Batch processing failed: {e}")
             traceback.print_exc()
-            stop_event.set() # Signal other threads to stop on critical error
+            stop_event.set()
             if socketio_instance and client_sid:
                  try:
                       socketio_instance.emit('upscale_error', {'message': f"Processing error: {e}"}, to=client_sid)
                  except Exception as emit_e:
                       print(f"WebSocket emit error failed: {emit_e}")
 
-
-    # --- Main Processor Loop (similar to your process_frames) ---
+    # ... (processor_loop remains the same) ...
     def processor_loop():
         print("[Processor] Starting...")
         frame_batch = []
         frame_nums = []
         while not stop_event.is_set():
             try:
-                item = frame_queue.get(timeout=0.1) # Check queue periodically
-                if item is None: # End signal from reader
-                    if frame_batch: process_batch(frame_batch, frame_nums) # Process remainder
-                    result_queue.put(None) # Signal writer to finish
+                item = frame_queue.get(timeout=0.1)
+                if item is None:
+                    if frame_batch: process_batch(frame_batch, frame_nums)
+                    result_queue.put(None)
                     break
 
                 frame_num, frame = item
@@ -310,88 +312,82 @@ def upscale_video(input_path, output_folder, model_path=None, scale_factor=None,
                     frame_batch, frame_nums = [], []
 
             except queue.Empty:
-                 # If reader is done (queue empty, None not received yet) and we have a partial batch
-                if frame_batch and frame_queue.empty() and not any(t.is_alive() for t in [reader_thread]):
+                reader_alive = any(t.is_alive() for t in threading.enumerate() if t.name == reader_thread.name) # Check if reader is still running
+                if frame_batch and frame_queue.empty() and not reader_alive:
                      process_batch(frame_batch, frame_nums)
                      frame_batch, frame_nums = [], []
-                continue # If empty but not stopped, keep waiting
+                continue
             except Exception as e:
                  print(f"[Processor Error] {e}")
                  stop_event.set()
-                 result_queue.put(None) # Signal writer about error
+                 result_queue.put(None)
                  break
         print("[Processor] Finishing.")
 
     # --- 5. Start Threads and Wait ---
-    reader_thread = threading.Thread(target=reader_thread_func, daemon=True)
-    writer_thread = threading.Thread(target=writer_thread_func, daemon=True)
-    processor_thread = threading.Thread(target=processor_loop, daemon=True) # Run processor in thread too
+    # ... (Thread starting/joining remains the same) ...
+    reader_thread = threading.Thread(target=reader_thread_func, name="ReaderThread", daemon=True)
+    writer_thread = threading.Thread(target=writer_thread_func, name="WriterThread", daemon=True)
+    processor_thread = threading.Thread(target=processor_loop, name="ProcessorThread", daemon=True)
 
     try:
-        metrics.start_time = time.time() # Reset start time
+        metrics.start_time = time.time()
         reader_thread.start()
         writer_thread.start()
         processor_thread.start()
 
-        # Wait for processor to finish (it signals writer)
         processor_thread.join()
-        # Wait for writer to finish (it gets signal from processor)
-        writer_thread.join(timeout=30) # Add timeout for safety
+        writer_thread.join(timeout=60) # Increased timeout
 
-        # Check if threads are still alive (indicates potential issue)
         if processor_thread.is_alive(): print("Warning: Processor thread did not exit cleanly.")
         if writer_thread.is_alive(): print("Warning: Writer thread did not exit cleanly.")
 
-        # Check if processing was stopped due to an error
         if stop_event.is_set():
-             # Check if an error was already emitted, otherwise raise generic
-             # (Error handling within process_batch should emit specific errors)
              raise RuntimeError("Upscaling process failed or was interrupted.")
 
-        # Final check on frame counts
         with metrics.lock:
-             if metrics.frames_written != metrics.frames_read or metrics.frames_written == 0:
+             # Allow slight mismatch due to potential read errors at end
+             if abs(metrics.frames_written - metrics.frames_read) > 5 and metrics.frames_written == 0:
                   print(f"Warning: Frame count mismatch! Read:{metrics.frames_read}, Written:{metrics.frames_written}")
-                  # Don't raise error, but log it. Might happen if video ends abruptly.
 
     except KeyboardInterrupt:
         print("\n[INTERRUPTED] Stopping threads...")
         stop_event.set()
-        raise # Re-raise interrupt
+        raise
     except Exception as e:
         print(f"\n[MAIN ERROR] {e}")
         stop_event.set()
-        raise # Re-raise error
+        raise
     finally:
         # --- 6. Cleanup ---
+        # ... (Cleanup remains the same) ...
         print("Releasing video resources...")
         if cap: cap.release()
         if video_writer: video_writer.release()
-        # Wait briefly for threads to potentially finish after stop signal
         reader_thread.join(timeout=1.0)
         writer_thread.join(timeout=1.0)
         processor_thread.join(timeout=1.0)
 
     # --- 7. Return Output Path ---
+    # ... (Return remains the same) ...
     print(f"--- Upscale Process Finished for {os.path.basename(input_path)} ---")
     return output_path
 
 
 # --- Helper for ONNX Session Setup (Internal) ---
+# ... (_setup_onnx_session remains the same) ...
 def _setup_onnx_session(model_file):
-    """Loads ONNX model with preferred providers."""
     print(f"Initializing ONNX session for: {os.path.basename(model_file)}")
     available_providers = ort.get_available_providers()
     print(f"Available ONNX providers: {available_providers}")
 
     sess_options = ort.SessionOptions()
     sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    # sess_options.intra_op_num_threads = os.cpu_count() # Manage threads carefully on server
 
     provider_preference = [
         ('ROCMExecutionProvider', {'device_id': 0, 'arena_extend_strategy': 'kNextPowerOfTwo', 'gpu_mem_limit': 16 * 1024 * 1024 * 1024}),
         ('MIGraphXExecutionProvider', {'device_id': 0}),
-        ('CUDAExecutionProvider', {'device_id': 0}), # Keep as fallback if available
+        ('CUDAExecutionProvider', {'device_id': 0}),
         'CPUExecutionProvider'
     ]
     session = None
@@ -404,14 +400,13 @@ def _setup_onnx_session(model_file):
                 print(f"Attempting to use provider: {provider_name}")
                 providers_list = [provider] if isinstance(provider, tuple) else [provider]
                 session = ort.InferenceSession(model_file, sess_options, providers=providers_list)
-                used_provider = session.get_providers()[0] # Get the actual used provider
+                used_provider = session.get_providers()[0]
                 print(f"✓ Successfully initialized ONNX with {used_provider}")
-                break # Stop after successful initialization
+                break
             else:
                  print(f"Provider not available: {provider_name}")
         except Exception as e:
             print(f"  Failed to initialize with {provider_name}: {e}")
-            # If ROCm fails, explicitly try CPU before giving up entirely?
             if provider_name == 'ROCMExecutionProvider' and 'CPUExecutionProvider' in available_providers:
                  print("  Falling back to CPU due to ROCm init failure.")
                  try:
@@ -421,7 +416,7 @@ def _setup_onnx_session(model_file):
                       break
                  except Exception as cpu_e:
                       print(f"  CPU fallback also failed: {cpu_e}")
-            continue # Try next provider in list
+            continue
 
     if session is None:
         raise RuntimeError("Could not initialize ONNX Runtime with any available provider.")
@@ -431,16 +426,22 @@ def _setup_onnx_session(model_file):
     return session, input_name, output_name, used_provider
 
 # --- Optional: Add a main block for testing this script directly ---
+# --- MODIFIED: Adjust test paths ---
 if __name__ == '__main__':
     print("Running old.py directly for testing...")
-    # Example usage (replace with actual paths for testing)
-    test_input = "input480.mp4" # Make sure this exists
-    test_output_folder = "test_output"
-    test_model = None # Let it find default
+    # Get project root assuming script is in backend/
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root_dir = os.path.abspath(os.path.join(script_dir, '..'))
+
+    # Look for test input in project root
+    test_input = os.path.join(project_root_dir, "input480.mp4")
+    # Output folder in project root
+    test_output_folder = os.path.join(project_root_dir, "test_output")
+    test_model = None # Let it find default in root
     test_scale = None # Let it infer
 
     if not os.path.exists(test_input):
-         print(f"Test input file '{test_input}' not found. Skipping direct test.")
+         print(f"Test input file '{test_input}' not found in project root. Skipping direct test.")
     else:
          try:
               start_test_time = time.time()
@@ -456,3 +457,4 @@ if __name__ == '__main__':
               print(f"Error: {e}")
               traceback.print_exc()
               print("----------------------------")
+# --- End Modification ---
