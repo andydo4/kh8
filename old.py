@@ -4,7 +4,7 @@
 # curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x2.pb -o FSRCNN_x2.pb
 # curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x4.pb -o FSRCNN_x4.pb
 
-#!/usr/bin/env python3
+# !/usr/bin/env python3
 """
 ONNX Runtime FSRCNN x2 video upscaler with ROCm acceleration
 Properly utilizes AMD GPUs via ROCm ExecutionProvider
@@ -30,7 +30,11 @@ except ImportError:
 # --- Configuration ---
 INPUT_VIDEO = "input480.mp4"
 OUTPUT_VIDEO = "output_2x_onnx.mp4"
-MODEL_FILE = "FSRCNN_x2.onnx"  # We'll need to convert from .pb
+# Try these models in order:
+# 1. Your own converted ONNX model
+# 2. PyTorch-created ONNX model (untrained but works)
+# 3. Fall back to OpenCV
+MODEL_FILES = ["FSRCNN_x2.onnx", "FSRCNN_x2_pytorch.onnx"]
 MODEL_SCALE = 2
 
 # Pipeline tuning
@@ -38,6 +42,7 @@ READ_BUFFER_SIZE = 20
 WRITE_BUFFER_SIZE = 20
 BATCH_SIZE = 8  # Process multiple frames at once
 DISPLAY_PREVIEW = False
+
 
 # --- Step 1: Convert TensorFlow model to ONNX if needed ---
 def convert_pb_to_onnx():
@@ -91,6 +96,7 @@ def convert_pb_to_onnx():
         print("\nAlternative: Use the OpenCV version or manually convert the model")
         return False
 
+
 # --- Performance Metrics ---
 class Metrics:
     def __init__(self):
@@ -112,16 +118,28 @@ class Metrics:
                 self.fps_counter = 0
                 self.last_fps_time = now
 
+
 metrics = Metrics()
+
 
 # --- Initialize ONNX Runtime with ROCm ---
 def setup_onnx_session():
     """Create ONNX Runtime session with ROCm acceleration"""
 
-    if not os.path.exists(MODEL_FILE):
-        print(f"\nModel file '{MODEL_FILE}' not found. Attempting conversion...")
-        if not convert_pb_to_onnx():
-            sys.exit(1)
+    # Find available model file
+    model_file = None
+    for mf in MODEL_FILES:
+        if os.path.exists(mf):
+            model_file = mf
+            print(f"✓ Found model: {model_file}")
+            break
+
+    if model_file is None:
+        print(f"\nNo ONNX model found. Tried: {MODEL_FILES}")
+        print("\nQuick solution: Create a PyTorch FSRCNN model")
+        print("Run: python3 simple_pytorch_onnx.py")
+        print("\nOR download a pretrained model and convert it")
+        sys.exit(1)
 
     print(f"\nInitializing ONNX Runtime session...")
 
@@ -154,7 +172,7 @@ def setup_onnx_session():
             provider_name = provider[0] if isinstance(provider, tuple) else provider
             if provider_name in available_providers:
                 providers = [provider] if isinstance(provider, tuple) else [provider]
-                session = ort.InferenceSession(MODEL_FILE, sess_options, providers=providers)
+                session = ort.InferenceSession(model_file, sess_options, providers=providers)
                 used_provider = provider_name
                 break
         except Exception as e:
@@ -173,10 +191,11 @@ def setup_onnx_session():
 
     return session, input_name, output_name, used_provider
 
+
 # --- Video Setup ---
-print(f"\n{'='*60}")
+print(f"\n{'=' * 60}")
 print("ONNX Runtime ROCm Video Upscaler")
-print(f"{'='*60}")
+print(f"{'=' * 60}")
 
 if not os.path.exists(INPUT_VIDEO):
     print(f"ERROR: Input video '{INPUT_VIDEO}' not found")
@@ -205,12 +224,13 @@ print(f"\nInput:  {orig_w}x{orig_h} @ {fps:.2f} FPS ({frame_count} frames)")
 print(f"Output: {new_w}x{new_h}")
 print(f"Device: {device}")
 print(f"Batch size: {BATCH_SIZE}")
-print(f"{'='*60}\n")
+print(f"{'=' * 60}\n")
 
 # --- Pipeline Queues ---
 frame_queue = queue.Queue(maxsize=READ_BUFFER_SIZE)
 result_queue = queue.Queue(maxsize=WRITE_BUFFER_SIZE)
 stop_event = threading.Event()
+
 
 # --- Thread 1: Frame Reader ---
 def reader_thread():
@@ -231,6 +251,7 @@ def reader_thread():
 
     frame_queue.put(None)
     print("\n[Reader] Finished reading all frames")
+
 
 # --- Thread 2: Frame Writer ---
 def writer_thread():
@@ -260,6 +281,7 @@ def writer_thread():
                 break
 
     print("\n[Writer] Finished writing all frames")
+
 
 # --- Main Thread: ONNX Inference ---
 def process_frames():
@@ -296,6 +318,7 @@ def process_frames():
                 frame_nums = []
             continue
 
+
 def process_batch(frames, frame_nums):
     """Process a batch of frames through ONNX Runtime"""
     start = time.time()
@@ -331,7 +354,7 @@ def process_batch(frames, frame_nums):
             if metrics.frames_processed % 50 == 0 or metrics.frames_processed < 50:
                 print(f"Progress: {progress:5.1f}% | "
                       f"FPS: {metrics.current_fps:6.1f} | "
-                      f"Batch: {len(frames):2d} frames in {batch_time*1000:5.1f}ms | "
+                      f"Batch: {len(frames):2d} frames in {batch_time * 1000:5.1f}ms | "
                       f"Queue: R={frame_queue.qsize():2d} W={result_queue.qsize():2d} | "
                       f"ETA: {int(eta):3d}s", end='\r')
 
@@ -340,6 +363,7 @@ def process_batch(frames, frame_nums):
         import traceback
         traceback.print_exc()
         stop_event.set()
+
 
 # --- Start Pipeline ---
 reader = threading.Thread(target=reader_thread, daemon=True)
@@ -366,9 +390,9 @@ cap.release()
 video_writer.release()
 
 # Statistics
-print(f"\n\n{'='*60}")
+print(f"\n\n{'=' * 60}")
 print("PROCESSING COMPLETE")
-print(f"{'='*60}")
+print(f"{'=' * 60}")
 print(f"Total time:       {elapsed:.2f}s")
 print(f"Frames read:      {metrics.frames_read}")
 print(f"Frames processed: {metrics.frames_processed}")
@@ -378,4 +402,4 @@ print(f"Average FPS:      {avg_fps:.2f}")
 print(f"Speedup factor:   {avg_fps / fps:.2f}x (1.0x = real-time)")
 print(f"Device used:      {device}")
 print(f"Output saved:     '{OUTPUT_VIDEO}'")
-print(f"{'='*60}\n")
+print(f"{'=' * 60}\n")
