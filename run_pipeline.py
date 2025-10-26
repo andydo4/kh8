@@ -28,13 +28,19 @@ if not os.path.exists(VIDEO_PATH):
 # ---------- Device (PyTorch optional) ----------
 import torch
 
+# Set environment variables to help with ROCm stability
+os.environ['PYTORCH_HIP_ALLOC_CONF'] = 'expandable_segments:True'
+os.environ['HSA_FORCE_FINE_GRAIN_PCIE'] = '1'
+
 if not torch.cuda.is_available():
     raise RuntimeError("ROCm GPU not detected. Check ROCm install and ROCm PyTorch wheels.")
 DEVICE = torch.device("cuda")  # HIP under ROCm
-AMP = torch.autocast(device_type="cuda", dtype=torch.float16)
+# Use float32 instead of float16 to avoid precision issues on MI300X
+AMP = torch.autocast(device_type="cuda", dtype=torch.float32, enabled=False)
 
 print("✅ Using AMD ROCm device:", torch.cuda.get_device_name(0))
 print("   Torch version:", torch.__version__)
+print("   Available memory:", f"{torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
 
 # ---------- MiDaS ----------
@@ -42,24 +48,40 @@ def load_midas():
     assert torch is not None, "PyTorch required for MiDaS"
     mname = "MiDaS_small" if USE_MIDAS_SMALL else "DPT_Hybrid"
     print(f"Loading MiDaS model: {mname}...")
-    midas = torch.hub.load('intel-isl/MiDaS', mname).to(DEVICE).eval()
-    transforms = torch.hub.load('intel-isl/MiDaS', 'transforms')
+
+    # Load model on CPU first to avoid GPU issues during init
+    midas = torch.hub.load('intel-isl/MiDaS', mname, trust_repo=True)
+    print(f"Moving model to {DEVICE}...")
+    midas = midas.to(DEVICE).eval()
+
+    transforms = torch.hub.load('intel-isl/MiDaS', 'transforms', trust_repo=True)
     tfm = transforms.small_transform if USE_MIDAS_SMALL else transforms.dpt_transform
+
+    # Warm up the model with a dummy pass
+    print("Warming up model...")
+    dummy = torch.randn(1, 3, 384, 384).to(DEVICE)
+    with torch.inference_mode():
+        _ = midas(dummy)
+    torch.cuda.synchronize()
+    print("Model ready!")
+
     return midas, tfm
 
 
 @torch.inference_mode()
 def infer_depth_midas(midas, tfm, bgr):
-    with AMP:
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        inp = tfm(rgb)
-        if DEVICE != "cpu":
-            inp = inp.to(DEVICE)
-        # Ensure input has batch dimension
-        if inp.dim() == 3:
-            inp = inp.unsqueeze(0)
-        pred = midas(inp)
-        depth = pred.squeeze().float().cpu().numpy()
+    # Don't use AMP for now to avoid potential issues
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    inp = tfm(rgb)
+    if DEVICE != "cpu":
+        inp = inp.to(DEVICE)
+    # Ensure input has batch dimension
+    if inp.dim() == 3:
+        inp = inp.unsqueeze(0)
+    pred = midas(inp)
+    depth = pred.squeeze().float().cpu().numpy()
+    # Clear cache to prevent memory buildup
+    torch.cuda.empty_cache()
     return depth  # relative (bigger ~ farther)
 
 
