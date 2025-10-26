@@ -4,7 +4,7 @@ project(fsr2_vulkan_min CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(FFX_SDK_DIR "/home/amd-knights/code/FidelityFX-SDK-v1")
+set(FFX_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/FidelityFX-SDK-v1")
 
 find_package(Vulkan REQUIRED)
 
