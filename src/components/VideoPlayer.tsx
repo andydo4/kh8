@@ -1,88 +1,92 @@
+// src/components/VideoPlayer.tsx
 import React, { useEffect, useRef, useState } from 'react';
 
 interface VideoPlayerProps {
-  videoFile: File;
-  onBack: () => void; // Function to go back to upload view
+  originalVideoFile: File; // Keep original file for name/info if needed
+  upscaledSrc: string | null; // URL of the processed video from server
+  onBack: () => void;
 }
 
-const VideoPlayer: React.FC<VideoPlayerProps> = ({ videoFile, onBack }) => {
+const VideoPlayer: React.FC<VideoPlayerProps> = ({ originalVideoFile, upscaledSrc, onBack }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  // State to store the resolution
-  const [originalResolution, setOriginalResolution] = useState<{width: number, height: number} | null>(null);
+  const [resolution, setResolution] = useState<{width: number, height: number} | null>(null);
 
-  // Effect to load video source and metadata
   useEffect(() => {
     const videoElement = videoRef.current;
-    if (videoElement) {
-      const objectURL = URL.createObjectURL(videoFile);
-      videoElement.src = objectURL;
+    if (videoElement && upscaledSrc) { // Use the upscaledSrc
+      console.log("Setting video source:", upscaledSrc); // Debug log
+      videoElement.src = upscaledSrc; // Set src to the server URL
 
-      // --- Event listener to get resolution ---
       const handleMetadata = () => {
         if (videoElement) {
-          console.log(`Video dimensions: ${videoElement.videoWidth}x${videoElement.videoHeight}`); // Log dimensions
-          setOriginalResolution({
+            console.log("Metadata loaded:", videoElement.videoWidth, videoElement.videoHeight); // Debug log
+          setResolution({
             width: videoElement.videoWidth,
             height: videoElement.videoHeight,
           });
         }
       };
-
+      // Make sure event listener is added *before* potentially playing
       videoElement.addEventListener('loadedmetadata', handleMetadata);
-      // --- End event listener ---
+      // Optional: Try to play automatically once metadata is loaded
+      // videoElement.play().catch(e => console.error("Autoplay failed:", e));
 
-      // Cleanup function
-      return () => {
-        URL.revokeObjectURL(objectURL);
+      return () => { // Cleanup
         if (videoElement) {
-          videoElement.removeEventListener('loadedmetadata', handleMetadata); // Remove listener
+          videoElement.removeEventListener('loadedmetadata', handleMetadata);
+          videoElement.src = ''; // Clear source on unmount/change
         }
-        setOriginalResolution(null); // Reset resolution on file change/unmount
+        setResolution(null);
       };
+    } else if (videoElement) {
+        // Clear src if upscaledSrc is null/empty
+        videoElement.src = '';
     }
-  }, [videoFile]); // Re-run when videoFile changes
+  }, [upscaledSrc]); // Depend ONLY on the upscaled source URL
 
   const handleDownload = () => {
-    // Note: This currently downloads the *original* uploaded file,
-    // not the upscaled version from the backend.
-    const objectURL = URL.createObjectURL(videoFile);
+    if (!upscaledSrc) return;
     const a = document.createElement('a');
-    a.href = objectURL;
-    a.download = `original_${videoFile.name}`; // Indicate it's the original
+    a.href = upscaledSrc;
+    a.download = `upscaled_${originalVideoFile.name}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(objectURL);
   };
 
   return (
-    <div className="w-full max-w-6xl flex flex-col items-center gap-4">
-      <h2 className="text-xl text-gray-300">Upscaling: {videoFile.name}</h2>
-
-      {/* --- Display Original Resolution --- */}
-      {originalResolution && (
+    <div className="w-full max-w-6xl flex flex-col items-center gap-4 p-4"> {/* Added padding */}
+      <h2 className="text-xl text-gray-300">Upscaled: {originalVideoFile.name}</h2>
+      {resolution && (
         <p className="text-sm text-gray-400">
-          Original Resolution: {originalResolution.width} x {originalResolution.height}
-          {/* You can add the target upscaled resolution here too if needed */}
+          Output Resolution: {resolution.width} x {resolution.height}
         </p>
       )}
-      {/* --- End Resolution Display --- */}
 
-      <video ref={videoRef} controls width="100%" className="rounded-lg shadow-lg bg-black"> {/* Added bg-black */}
+      {/* Show loading/message until source is ready and metadata loaded */}
+      {!upscaledSrc && <p className="text-yellow-400">Waiting for video stream...</p>}
+      {upscaledSrc && !resolution && <p className="text-blue-400">Loading video metadata...</p>}
+
+      <video
+          ref={videoRef}
+          controls
+          width="100%"
+          className={`rounded-lg shadow-lg bg-black ${!upscaledSrc ? 'hidden' : 'block'}`} // Hide until src is set
+          preload="metadata" // Help browser get metadata quickly
+      >
         Your browser does not support the video tag.
       </video>
-
-      <div className='flex gap-6'>
+      <div className='flex flex-wrap justify-center gap-4 md:gap-6 mt-2'> {/* Added wrap and responsive gap */}
         <button
           onClick={handleDownload}
-          // Corrected arbitrary value syntax
-          className="mt-4 bg-[var(--blue)] px-6 py-2 text-lg rounded-full font-semibold text-white hover:bg-opacity-80 transition-opacity duration-300"
+          disabled={!upscaledSrc || !resolution} // Disable until metadata is loaded too
+          className="bg-[var(--blue)] px-6 py-2 text-lg rounded-full font-semibold text-white hover:bg-opacity-80 transition-opacity duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Download Original {/* Clarified button purpose */}
+          Download Upscaled
         </button>
         <button
           onClick={onBack}
-          className="mt-4 bg-black/40 px-6 py-2 text-lg rounded-full font-semibold text-gray-700 hover:text-gray-400 hover:bg-black/30 transition-colors duration-150"
+          className="bg-gray-500 px-6 py-2 text-lg rounded-full font-semibold text-white hover:bg-gray-600 transition-colors duration-150"
         >
           Upload New Video
         </button>
