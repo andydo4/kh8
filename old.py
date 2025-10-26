@@ -4,7 +4,6 @@
 # curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x2.pb -o FSRCNN_x2.pb
 # curl -L https://github.com/Saafke/FSRCNN_Tensorflow/raw/master/models/FSRCNN_x4.pb -o FSRCNN_x4.pb
 
-# !/usr/bin/env python3
 """
 ONNX Runtime FSRCNN x2 video upscaler with ROCm acceleration
 Properly utilizes AMD GPUs via ROCm ExecutionProvider
