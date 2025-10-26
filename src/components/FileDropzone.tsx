@@ -1,6 +1,7 @@
 import React, { useState, useRef } from "react";
 import type { DragEvent, ChangeEvent } from "react";
 import "../App.css";
+import UploadIcon from "./UploadIcon";
 
 // Define the props the component will accept
 interface FileDropzoneProps {
@@ -124,11 +125,15 @@ const FileDropzone: React.FC<FileDropzoneProps> = ({
           </button>
         </div>
       ) : (
-        <p className="text-gray-500">
-          {isDragging
-            ? 'Drop the MP4 file here...'
-            : 'Drag & drop an MP4 file here, or click to select'}
-        </p>
+        <div className="flex flex-col items-center gap-2">
+            <UploadIcon color="#1e2939" className="w-30 h-30"/>
+            <p className="text-gray-800 text-xl">
+            {isDragging
+                ? 'Drop the MP4 file here...'
+                : 'Drag & drop an MP4 file here, or click to select'}
+            </p>
+        </div>
+
       )}
 
       {error && (

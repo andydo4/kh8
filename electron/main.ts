@@ -16,17 +16,22 @@ const __dirname = path.dirname(__filename);
 // │ │ └── preload.js
 // │
 process.env.DIST = path.join(__dirname, "../dist");
-process.env.VITE_PUBLIC = app.isPackaged
-  ? process.env.DIST
-  : path.join(process.env.DIST, "../public");
+const publicPath = app.isPackaged
+  ? path.join(process.env.DIST, '../public') // Path when packaged
+  : path.join(__dirname, '../public'); // Path during development
+// process.env.VITE_PUBLIC = app.isPackaged
+//   ? process.env.DIST
+//   : path.join(process.env.DIST, "../public");
 
 let win: BrowserWindow | null;
 // 🚧 Use ['ENV_NAME'] avoid vite:define plugin - Vite@2.x
 const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
-
 function createWindow() {
+  console.log('Icon path:', path.join(publicPath, 'bluescale.ico'));
+
   win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
+    icon: path.join(publicPath, 'bluescale.ico'),
+    // icon: path.join(process.env.VITE_PUBLIC, "electron-vite.svg"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"), // If you need a preload script
       // sandbox: false, // Use with caution in untrusted environments
