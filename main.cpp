@@ -309,22 +309,27 @@ int main(int argc, char** argv){
 
     // Initialize FSR2 with v1.1.2 API
     FfxFsr2Context fsr{};
+    size_t scratchSize = 0;
+    void* scratchBuffer = nullptr;
     {
+        // Get scratch buffer size
+        scratchSize = ffxGetScratchMemorySizeVK(C.pdev, 1);
+        scratchBuffer = malloc(scratchSize);
+
         // Create VkDeviceContext for FFX
         VkDeviceContext vkDeviceContext{};
         vkDeviceContext.vkDevice = C.device;
         vkDeviceContext.vkPhysicalDevice = C.pdev;
         vkDeviceContext.vkDeviceProcAddr = vkGetDeviceProcAddr;
 
-        // Get scratch buffer size
-        size_t scratchSize = ffxGetScratchMemorySizeVK(C.pdev, 1);
-        void* scratchBuffer = malloc(scratchSize);
+        // Get FfxDevice handle
+        FfxDevice ffxDevice = ffxGetDeviceVK(&vkDeviceContext);
 
         // Get backend interface
         FfxInterface backendInterface{};
         FfxErrorCode ec = ffxGetInterfaceVK(
             &backendInterface,
-            ffxGetDeviceVK(&vkDeviceContext),
+            ffxDevice,
             scratchBuffer,
             scratchSize,
             1);
@@ -488,6 +493,11 @@ int main(int argc, char** argv){
     std::cout << "Encode: ffmpeg -y -framerate 30 -i " << outRoot << "/%05d.png -c:v libx264 -crf 16 -pix_fmt yuv420p upscaled_output.mp4\n";
 
     ffxFsr2ContextDestroy(&fsr);
+
+    // Clean up scratch buffer
+    if(scratchBuffer) {
+        free(scratchBuffer);
+    }
 
     vkDestroyImageView(C.device, outImg.view, nullptr);
     vkFreeMemory(C.device, outImg.mem, nullptr);
