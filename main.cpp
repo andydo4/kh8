@@ -1,4 +1,4 @@
-// main.cpp - Fixed version with better compatibility
+// main.cpp - FSR2 v1.1.2 SDK compatible version
 #include <vulkan/vulkan.h>
 #include <cassert>
 #include <cstdio>
@@ -19,11 +19,11 @@
 
 // FidelityFX FSR2 (host) + Vulkan backend
 #include <FidelityFX/host/ffx_fsr2.h>
-#include <FidelityFX/host/backends/vk/ffx_fsr2_vk.h>
+#include <FidelityFX/host/backends/vk/ffx_vk.h>
 
 namespace fs = std::filesystem;
 
-// ------------ quick helpers ------------
+// Helper functions
 static void checkVk(VkResult r, const char* where){
     if(r != VK_SUCCESS){
         std::cerr << "Vulkan error at " << where << " code=" << r << "\n";
@@ -43,7 +43,7 @@ static std::vector<uint8_t> readBin(const fs::path& p){
     return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), {});
 }
 
-// ------------ Vulkan minimal bootstrap ------------
+// Vulkan context
 struct VkCtx {
     VkInstance instance{};
     VkPhysicalDevice pdev{};
@@ -55,8 +55,6 @@ struct VkCtx {
 
 static VkCtx makeVulkan() {
     VkCtx C{};
-
-    // Instance
     VkApplicationInfo ai{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     ai.pApplicationName = "fsr2_vulkan_min";
     ai.apiVersion = VK_API_VERSION_1_2;
@@ -65,17 +63,12 @@ static VkCtx makeVulkan() {
     ici.pApplicationInfo = &ai;
     checkVk(vkCreateInstance(&ici, nullptr, &C.instance), "vkCreateInstance");
 
-    // Physical device
     uint32_t ndev=0;
     vkEnumeratePhysicalDevices(C.instance, &ndev, nullptr);
-    if(ndev==0) {
-        std::cerr << "No Vulkan devices found.\n";
-        std::exit(1);
-    }
+    if(ndev==0) { std::cerr << "No Vulkan devices.\n"; std::exit(1); }
     std::vector<VkPhysicalDevice> devs(ndev);
     vkEnumeratePhysicalDevices(C.instance, &ndev, devs.data());
 
-    // Pick first device with compute queue
     for(auto d: devs){
         uint32_t nq=0;
         vkGetPhysicalDeviceQueueFamilyProperties(d, &nq, nullptr);
@@ -83,19 +76,13 @@ static VkCtx makeVulkan() {
         vkGetPhysicalDeviceQueueFamilyProperties(d, &nq, qprops.data());
         for(uint32_t i=0; i<nq; ++i){
             if(qprops[i].queueFlags & VK_QUEUE_COMPUTE_BIT){
-                C.pdev = d;
-                C.queueFamily = i;
-                break;
+                C.pdev = d; C.queueFamily = i; break;
             }
         }
         if(C.pdev) break;
     }
-    if(!C.pdev){
-        std::cerr << "No compute-capable device found.\n";
-        std::exit(1);
-    }
+    if(!C.pdev){ std::cerr << "No compute device.\n"; std::exit(1); }
 
-    // Device + queue
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     qci.queueFamilyIndex = C.queueFamily;
@@ -108,7 +95,6 @@ static VkCtx makeVulkan() {
     checkVk(vkCreateDevice(C.pdev, &dci, nullptr, &C.device), "vkCreateDevice");
     vkGetDeviceQueue(C.device, C.queueFamily, 0, &C.queue);
 
-    // Command pool
     VkCommandPoolCreateInfo cp{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     cp.queueFamilyIndex = C.queueFamily;
     cp.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -140,7 +126,7 @@ static void endSubmitWait(VkCtx& C, VkCommandBuffer cmd){
     vkFreeCommandBuffers(C.device, C.cmdPool, 1, &cmd);
 }
 
-// ------------ images & uploads ------------
+// Image handling
 struct Image {
     VkImage img{};
     VkDeviceMemory mem{};
@@ -155,15 +141,13 @@ static uint32_t findMemType(VkPhysicalDevice pdev, uint32_t bits, VkMemoryProper
     for(uint32_t i=0; i<mp.memoryTypeCount; ++i)
         if((bits & (1u<<i)) && (mp.memoryTypes[i].propertyFlags & req)==req)
             return i;
-    std::cerr << "No suitable memory type found.\n";
+    std::cerr << "No suitable memory type.\n";
     std::exit(1);
 }
 
 static Image makeImage(VkCtx& C, uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage){
     Image I;
-    I.w = w;
-    I.h = h;
-    I.fmt = fmt;
+    I.w = w; I.h = h; I.fmt = fmt;
 
     VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ci.imageType = VK_IMAGE_TYPE_2D;
@@ -185,7 +169,6 @@ static Image makeImage(VkCtx& C, uint32_t w, uint32_t h, VkFormat fmt, VkImageUs
     checkVk(vkAllocateMemory(C.device, &ai, nullptr, &I.mem), "vkAllocateMemory");
     vkBindImageMemory(C.device, I.img, I.mem, 0);
 
-    // Create image view
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image = I.img;
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -200,8 +183,7 @@ static Image makeImage(VkCtx& C, uint32_t w, uint32_t h, VkFormat fmt, VkImageUs
 
 static void trans(VkCommandBuffer cmd, VkImage img, VkImageLayout oldL, VkImageLayout newL){
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    b.oldLayout = oldL;
-    b.newLayout = newL;
+    b.oldLayout = oldL; b.newLayout = newL;
     b.image = img;
     b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     b.subresourceRange.levelCount = 1;
@@ -217,7 +199,6 @@ static void trans(VkCommandBuffer cmd, VkImage img, VkImageLayout oldL, VkImageL
 }
 
 static void uploadToImage(VkCtx& C, Image& I, const void* data, size_t bytes){
-    // Create staging buffer
     VkBuffer buf{};
     VkDeviceMemory mem{};
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -298,21 +279,18 @@ static std::vector<uint8_t> downloadRGBA8(VkCtx& C, Image& I){
     return out;
 }
 
-// ------------ FSR2 run ------------
+// Main
 int main(int argc, char** argv){
-    // Paths
     std::string inRoot = argc > 1 ? argv[1] : "outputs_fsr2";
     std::string outRoot = argc > 2 ? argv[2] : "upscaled";
     fs::create_directories(outRoot);
 
-    // Read meta of frame 0
     auto meta0 = fs::path(inRoot) / "meta" / "00000.json";
     if(!fs::exists(meta0)){
-        std::cerr << "meta/00000.json missing. Run run_pipeline.py first!\n";
+        std::cerr << "meta/00000.json missing!\n";
         return 1;
     }
 
-    // Parse JSON for width/height
     int renderW = 0, renderH = 0;
     {
         std::ifstream f(meta0);
@@ -323,36 +301,43 @@ int main(int argc, char** argv){
         renderH = std::stoi(s.substr(s.find(':', hpos) + 1));
     }
 
-    // Choose upscale factor (2x)
     int displayW = renderW * 2;
     int displayH = renderH * 2;
 
-    std::cout << "Input resolution: " << renderW << "x" << renderH << "\n";
-    std::cout << "Output resolution: " << displayW << "x" << displayH << "\n";
+    std::cout << "Input: " << renderW << "x" << renderH << "\n";
+    std::cout << "Output: " << displayW << "x" << displayH << "\n";
 
-    // Initialize Vulkan
     VkCtx C = makeVulkan();
 
-    // Initialize FSR2
+    // Initialize FSR2 with v1.1.2 API
     FfxFsr2Context fsr{};
     {
+        // Get scratch buffer size
+        size_t scratchSize = ffxGetScratchMemorySizeVK(C.pdev, 1);
+        void* scratchBuffer = malloc(scratchSize);
+
+        // Get backend interface
+        FfxInterface backendInterface{};
+        FfxErrorCode ec = ffxGetInterfaceVK(
+            &backendInterface,
+            ffxGetDeviceVK(C.device),
+            scratchBuffer,
+            scratchSize,
+            1);
+
+        if(ec != FFX_OK){
+            std::cerr << "ffxGetInterfaceVK failed: " << ec << "\n";
+            return 1;
+        }
+
+        // Create FSR2 context
         FfxFsr2ContextDescription desc{};
-        desc.flags = FFX_FSR2_ENABLE_AUTO_EXPOSURE;
+        desc.flags = 0;
         desc.maxRenderSize.width = renderW;
         desc.maxRenderSize.height = renderH;
         desc.displaySize.width = displayW;
         desc.displaySize.height = displayH;
-
-        // Get Vulkan backend interface
-        size_t scratchSize = ffxFsr2GetScratchMemorySizeVK(C.pdev);
-        void* scratch = malloc(scratchSize);
-        FfxErrorCode ec = ffxFsr2GetInterfaceVK(&desc.backendInterface, scratch, scratchSize, C.pdev, vkGetDeviceProcAddr);
-        if(ec != FFX_OK){
-            std::cerr << "ffxFsr2GetInterfaceVK failed: " << ec << "\n";
-            return 1;
-        }
-
-        desc.device = ffxGetDeviceVK(C.device);
+        desc.backendInterface = backendInterface;
 
         ec = ffxFsr2ContextCreate(&fsr, &desc);
         if(ec != FFX_OK){
@@ -361,10 +346,10 @@ int main(int argc, char** argv){
         }
     }
 
-    // Create output image
+    // Output image
     Image outImg = makeImage(C, displayW, displayH,
         VK_FORMAT_R8G8B8A8_UNORM,
-        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 
     // Count frames
     int numFrames = 0;
@@ -373,28 +358,20 @@ int main(int argc, char** argv){
         if(!fs::exists(p)) break;
     }
     if(numFrames == 0){
-        std::cerr << "No frames found in " << inRoot << "/color\n";
+        std::cerr << "No frames found!\n";
         return 1;
     }
 
     std::cout << "Processing " << numFrames << " frames...\n";
 
-    // Per-frame loop
     for(int i = 0; i < numFrames; ++i){
         std::string idx = fmt5(i);
 
-        // Load COLOR (RGBA8)
+        // Load color
         int cw, ch, cn;
         std::string cpath = (fs::path(inRoot) / "color" / (idx + ".png")).string();
         uint8_t* cimg = stbi_load(cpath.c_str(), &cw, &ch, &cn, 4);
-        if(!cimg){
-            std::cerr << "Failed to load: " << cpath << "\n";
-            return 1;
-        }
-        if(cw != renderW || ch != renderH){
-            std::cerr << "Size mismatch in color frame " << i << "\n";
-            return 1;
-        }
+        if(!cimg){ std::cerr << "Failed: " << cpath << "\n"; return 1; }
 
         Image color = makeImage(C, renderW, renderH,
             VK_FORMAT_R8G8B8A8_UNORM,
@@ -402,18 +379,11 @@ int main(int argc, char** argv){
         uploadToImage(C, color, cimg, renderW * renderH * 4);
         stbi_image_free(cimg);
 
-        // Load DEPTH (R16 PNG)
+        // Load depth
         int dw, dh, dc;
         std::string dpath = (fs::path(inRoot) / "depth_r16" / (idx + ".png")).string();
         uint16_t* dimg = reinterpret_cast<uint16_t*>(stbi_load_16(dpath.c_str(), &dw, &dh, &dc, 1));
-        if(!dimg){
-            std::cerr << "Failed to load: " << dpath << "\n";
-            return 1;
-        }
-        if(dw != renderW || dh != renderH){
-            std::cerr << "Size mismatch in depth frame " << i << "\n";
-            return 1;
-        }
+        if(!dimg){ std::cerr << "Failed: " << dpath << "\n"; return 1; }
 
         Image depth = makeImage(C, renderW, renderH,
             VK_FORMAT_R16_UNORM,
@@ -421,21 +391,16 @@ int main(int argc, char** argv){
         uploadToImage(C, depth, dimg, renderW * renderH * sizeof(uint16_t));
         stbi_image_free(dimg);
 
-        // Load MOTION (RG16F .bin)
+        // Load motion
         auto mpath = fs::path(inRoot) / "motion_rg16f" / (idx + ".bin");
         std::vector<uint8_t> motionData = readBin(mpath);
-        size_t expectedBytes = size_t(renderW) * renderH * 2 * sizeof(uint16_t);
-        if(motionData.size() != expectedBytes){
-            std::cerr << "Motion size mismatch frame " << i << "\n";
-            return 1;
-        }
 
         Image motion = makeImage(C, renderW, renderH,
             VK_FORMAT_R16G16_SFLOAT,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         uploadToImage(C, motion, motionData.data(), motionData.size());
 
-        // Prepare output layout
+        // Prepare output
         {
             auto cmd = beginCmd(C);
             trans(cmd, outImg.img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
@@ -445,12 +410,31 @@ int main(int argc, char** argv){
         // Dispatch FSR2
         auto cmd = beginCmd(C);
 
+        // Create resource descriptions
+        FfxResourceDescription colorDesc = {};
+        colorDesc.type = FFX_RESOURCE_TYPE_TEXTURE2D;
+        colorDesc.format = FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
+        colorDesc.width = renderW;
+        colorDesc.height = renderH;
+        colorDesc.mipCount = 1;
+
+        FfxResourceDescription depthDesc = colorDesc;
+        depthDesc.format = FFX_SURFACE_FORMAT_R16_UNORM;
+
+        FfxResourceDescription motionDesc = colorDesc;
+        motionDesc.format = FFX_SURFACE_FORMAT_R16G16_FLOAT;
+
+        FfxResourceDescription outputDesc = colorDesc;
+        outputDesc.width = displayW;
+        outputDesc.height = displayH;
+        outputDesc.format = FFX_SURFACE_FORMAT_R8G8B8A8_UNORM;
+
         FfxFsr2DispatchDescription dd{};
         dd.commandList = ffxGetCommandListVK(cmd);
-        dd.color = ffxGetTextureResourceVK(&fsr, color.img, color.view, renderW, renderH, VK_FORMAT_R8G8B8A8_UNORM);
-        dd.depth = ffxGetTextureResourceVK(&fsr, depth.img, depth.view, renderW, renderH, VK_FORMAT_R16_UNORM);
-        dd.motionVectors = ffxGetTextureResourceVK(&fsr, motion.img, motion.view, renderW, renderH, VK_FORMAT_R16G16_SFLOAT);
-        dd.output = ffxGetTextureResourceVK(&fsr, outImg.img, outImg.view, displayW, displayH, VK_FORMAT_R8G8B8A8_UNORM);
+        dd.color = ffxGetResourceVK(color.img, colorDesc, L"Color", FFX_RESOURCE_STATE_COMPUTE_READ);
+        dd.depth = ffxGetResourceVK(depth.img, depthDesc, L"Depth", FFX_RESOURCE_STATE_COMPUTE_READ);
+        dd.motionVectors = ffxGetResourceVK(motion.img, motionDesc, L"Motion", FFX_RESOURCE_STATE_COMPUTE_READ);
+        dd.output = ffxGetResourceVK(outImg.img, outputDesc, L"Output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 
         dd.jitterOffset.x = 0.f;
         dd.jitterOffset.y = 0.f;
@@ -460,15 +444,16 @@ int main(int argc, char** argv){
         dd.renderSize.height = renderH;
         dd.preExposure = 1.f;
         dd.frameTimeDelta = 1.0f / 30.0f;
-        dd.reset = (i == 0) ? FFX_TRUE : FFX_FALSE;
-        dd.enableSharpening = FFX_TRUE;
+        dd.reset = (i == 0);
+        dd.enableSharpening = true;
         dd.sharpness = 0.2f;
         dd.cameraNear = 0.1f;
         dd.cameraFar = 1000.0f;
+        dd.cameraFovAngleVertical = 1.0f;
 
         FfxErrorCode ec = ffxFsr2ContextDispatch(&fsr, &dd);
         if(ec != FFX_OK){
-            std::cerr << "FSR2 dispatch failed frame " << i << ": " << ec << "\n";
+            std::cerr << "FSR2 dispatch failed: " << ec << "\n";
             return 1;
         }
 
@@ -479,7 +464,7 @@ int main(int argc, char** argv){
         std::string outPath = (fs::path(outRoot) / (idx + ".png")).string();
         stbi_write_png(outPath.c_str(), displayW, displayH, 4, rgba.data(), displayW * 4);
 
-        // Cleanup frame resources
+        // Cleanup
         vkDestroyImageView(C.device, color.view, nullptr);
         vkFreeMemory(C.device, color.mem, nullptr);
         vkDestroyImage(C.device, color.img, nullptr);
@@ -495,10 +480,9 @@ int main(int argc, char** argv){
         std::cout << "\rFrame " << i + 1 << "/" << numFrames << std::flush;
     }
 
-    std::cout << "\n\nDone! Creating final video...\n";
-    std::cout << "Run: ffmpeg -y -framerate 30 -i " << outRoot << "/%05d.png -c:v libx264 -crf 16 -pix_fmt yuv420p upscaled_output.mp4\n";
+    std::cout << "\n\nDone!\n";
+    std::cout << "Encode: ffmpeg -y -framerate 30 -i " << outRoot << "/%05d.png -c:v libx264 -crf 16 -pix_fmt yuv420p upscaled_output.mp4\n";
 
-    // Cleanup
     ffxFsr2ContextDestroy(&fsr);
 
     vkDestroyImageView(C.device, outImg.view, nullptr);
