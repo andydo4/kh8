@@ -14,16 +14,11 @@ FLOW_IMPL = "DIS"      # "DIS" or "FARNEBACK" (ignored if USE_RAFT)
 # ---------- Device (PyTorch optional) ----------
 
 import torch
-
-# In PyTorch ROCm builds, the HIP backend is still exposed through "cuda"
 if not torch.cuda.is_available():
-    raise RuntimeError("ROCm GPU not detected. Please verify your ROCm and amdgpu drivers.")
-
-DEVICE = torch.device("cuda")  # HIP under the hood
+    raise RuntimeError("ROCm GPU not detected. Check ROCm install and ROCm PyTorch wheels.")
+DEVICE = torch.device("cuda")  # HIP under ROCm
 AMP = torch.autocast(device_type="cuda", dtype=torch.float16)
 
-print("✅ Using AMD ROCm device:", torch.cuda.get_device_name(0))
-print("   Torch version:", torch.__version__)
 
 # ---------- MiDaS ----------
 def load_midas():
