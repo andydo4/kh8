@@ -18,6 +18,15 @@ import threading
 import queue
 from collections import deque
 
+# Add ROCm libraries to path
+rocm_paths = ['/opt/rocm/lib', '/opt/rocm/lib64', '/opt/rocm-5.7.0/lib', '/opt/rocm-6.0.0/lib']
+for path in rocm_paths:
+    if os.path.exists(path):
+        current_ld = os.environ.get('LD_LIBRARY_PATH', '')
+        if path not in current_ld:
+            os.environ['LD_LIBRARY_PATH'] = f"{path}:{current_ld}"
+        print(f"Added ROCm path: {path}")
+
 # Check for ONNX Runtime
 try:
     import onnxruntime as ort
@@ -149,6 +158,9 @@ def setup_onnx_session():
 
     # Try ROCm provider first, then CUDA, then CPU
     provider_preference = [
+        ('MIGraphXExecutionProvider', {
+            'device_id': 0,
+        }),
         ('ROCMExecutionProvider', {
             'device_id': 0,
             'arena_extend_strategy': 'kNextPowerOfTwo',
@@ -229,21 +241,29 @@ stop_event = threading.Event()
 def reader_thread():
     """Continuously reads frames from video source"""
     frame_num = 0
+    failed_reads = 0
     while not stop_event.is_set():
         ret, frame = cap.read()
         if not ret:
+            if failed_reads < 5:  # Allow a few retries
+                failed_reads += 1
+                continue
+            print(f"\n[Reader] Finished at frame {frame_num} (expected {frame_count})")
             break
 
+        failed_reads = 0  # Reset counter on successful read
         try:
-            frame_queue.put((frame_num, frame), timeout=0.1)
+            frame_queue.put((frame_num, frame), timeout=0.5)
             with metrics.lock:
                 metrics.frames_read += 1
             frame_num += 1
         except queue.Full:
+            # Queue is full, wait a bit
+            time.sleep(0.01)
             continue
 
     frame_queue.put(None)
-    print("\n[Reader] Finished reading all frames")
+    print(f"\n[Reader] Finished reading {frame_num} frames")
 
 # --- Thread 2: Frame Writer ---
 def writer_thread():
