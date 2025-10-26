@@ -4,12 +4,26 @@ import cv2, numpy as np
 from pathlib import Path
 
 # ---------- Config ----------
-VIDEO_PATH = "input.mp4"
+VIDEO_PATH = "input480.mp4"
 OUT_DIR = Path("outputs_fsr2")
 TARGET_W = None  # None keeps source size; or set e.g. 1280
 USE_RAFT = False  # True if you've wired RAFT + GPU
 USE_MIDAS_SMALL = False  # Small = faster on mac
 FLOW_IMPL = "DIS"  # "DIS" or "FARNEBACK" (ignored if USE_RAFT)
+
+# Validate input file exists
+if not os.path.exists(VIDEO_PATH):
+    print(f"❌ Error: Video file '{VIDEO_PATH}' not found!")
+    print(f"   Current directory: {os.getcwd()}")
+    print(f"   Available video files:")
+    for ext in ['*.mp4', '*.avi', '*.mov', '*.mkv']:
+        import glob
+
+        files = glob.glob(ext)
+        if files:
+            for f in files:
+                print(f"     - {f}")
+    raise FileNotFoundError(f"Video file '{VIDEO_PATH}' not found")
 
 # ---------- Device (PyTorch optional) ----------
 import torch
@@ -153,10 +167,15 @@ def main():
     for d in ["color", "depth_r16", "motion_rg16f", "meta"]:
         (OUT_DIR / d).mkdir(exist_ok=True, parents=True)
 
+    print(f"Opening video: {VIDEO_PATH}")
     cap = cv2.VideoCapture(VIDEO_PATH)
+
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video file: {VIDEO_PATH}")
+
     ok, prev = cap.read()
     if not ok:
-        raise RuntimeError("Could not read first frame")
+        raise RuntimeError(f"Could not read first frame from: {VIDEO_PATH}")
     prev = downscale_to_width(prev, TARGET_W)
 
     # Load MiDaS
